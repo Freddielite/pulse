@@ -12,21 +12,34 @@ function toDateKey(d) {
   return d.toISOString().slice(0, 10);
 }
 
-export default function MonitorHeatmap({ dailyData, days = 90 }) {
+export default function MonitorHeatmap({ dailyData, createdAt, days = 90 }) {
   const byDate = Object.fromEntries(dailyData.map((d) => [d.date, d]));
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const start = new Date(today);
-  start.setDate(start.getDate() - (days - 1));
+
+  // Don't pad the grid back further than the monitor has actually
+  // existed - a monitor added a few hours ago showing 90 columns of
+  // empty gray (with its one real day buried off-screen to the right)
+  // reads as broken, not as "not enough history yet".
+  const earliestPossible = new Date(today);
+  earliestPossible.setDate(earliestPossible.getDate() - (days - 1));
+  let start = earliestPossible;
+  if (createdAt) {
+    const created = new Date(createdAt);
+    created.setHours(0, 0, 0, 0);
+    if (created > earliestPossible) start = created;
+  }
+
+  const daysToRender = Math.round((today - start) / (24 * 60 * 60 * 1000)) + 1;
   // Pad the front of the grid so columns line up as calendar weeks
   // (Sun-Sat rows), the way GitHub's contribution graph does, rather
-  // than an arbitrary run of `days` cells with no weekday alignment.
+  // than an arbitrary run of cells with no weekday alignment.
   const startDow = start.getDay();
 
   const cells = [];
   for (let i = 0; i < startDow; i++) cells.push(null);
-  for (let i = 0; i < days; i++) {
+  for (let i = 0; i < daysToRender; i++) {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
     const key = toDateKey(d);

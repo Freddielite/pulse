@@ -158,7 +158,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
       <div className="pl-section-label">Uptime history</div>
       <div className="pl-panel">
         {dailyUptime.length > 0 ? (
-          <MonitorHeatmap dailyData={dailyUptime} days={90} />
+          <MonitorHeatmap dailyData={dailyUptime} createdAt={monitor.created_at} days={90} />
         ) : (
           <div style={{ color: "var(--ink-dim)", fontSize: 13 }}>Not enough history yet.</div>
         )}
@@ -206,7 +206,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
           incidents.map((inc) => (
             <div className="pl-incident-row" key={inc.id}>
               <div>
-                <div>{formatDate(inc.started_at)}</div>
+                <div>{formatDateTime(inc.started_at)}</div>
                 <div className="pl-incident-row__error">{inc.error_message}</div>
               </div>
               <div className="pl-incident-row__duration">

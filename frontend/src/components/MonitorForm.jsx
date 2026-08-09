@@ -78,6 +78,9 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
           <div className="pl-field">
             <label>Check interval (minutes)</label>
             <input type="number" min={1} value={interval} onChange={(e) => setInterval(e.target.value)} />
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+              This is a minimum spacing, not a guarantee: actual checks can never happen faster than your external cron job calls /api/cron/tick.
+            </div>
             {keepAlive && Number(interval) > 10 && (
               <div style={{ fontSize: 11.5, color: "var(--amber)" }}>
                 Render free-tier apps sleep after 15 minutes idle. An interval this long may not keep it awake.
