@@ -80,6 +80,10 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMPTZ;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS group_name TEXT;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS body_contains TEXT;
+    -- Opt-in flag: only monitors with this set to true are ever returned by
+    -- the unauthenticated /api/public/status endpoint. Defaults to false so
+    -- nothing becomes public by accident.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS public_status BOOLEAN NOT NULL DEFAULT false;
 
     CREATE TABLE IF NOT EXISTS checks (
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -65,7 +65,7 @@ router.post("/", async (req, res) => {
 });
 
 router.patch("/:id", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, active, group_name, body_contains } = req.body;
+  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, active, group_name, body_contains, public_status } = req.body;
   try {
     const { rows } = await pool.query(
       `UPDATE monitors SET
@@ -80,6 +80,7 @@ router.patch("/:id", async (req, res) => {
          active = COALESCE($11, active),
          group_name = $12,
          body_contains = $13,
+         public_status = COALESCE($14, public_status),
          updated_at = now()
        WHERE id = $1 AND user_id = $2 RETURNING *`,
       [
@@ -96,6 +97,7 @@ router.patch("/:id", async (req, res) => {
         active,
         group_name?.trim() || null,
         body_contains?.trim() || null,
+        public_status,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
