@@ -11,6 +11,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [authHeaderName, setAuthHeaderName] = useState(monitor?.auth_header_name || "");
   const [authHeaderValue, setAuthHeaderValue] = useState(monitor?.auth_header_value || "");
   const [keepAlive, setKeepAlive] = useState(monitor?.keep_alive_target || false);
+  const [publicStatus, setPublicStatus] = useState(monitor?.public_status || false);
   const [groupName, setGroupName] = useState(monitor?.group_name || "");
   const [bodyContains, setBodyContains] = useState(monitor?.body_contains || "");
   const [error, setError] = useState(null);
@@ -29,6 +30,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       auth_header_name: authHeaderName.trim() || null,
       auth_header_value: authHeaderValue.trim() || null,
       keep_alive_target: keepAlive,
+      public_status: publicStatus,
       group_name: groupName.trim() || null,
       body_contains: bodyContains.trim() || null,
     };
@@ -128,6 +130,17 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               <span className="pl-toggle__knob" />
             </button>
           </div>
+          <div className="pl-toggle-row">
+            <span>Show on public status page</span>
+            <button type="button" className={`pl-toggle ${publicStatus ? "on" : ""}`} onClick={() => setPublicStatus(!publicStatus)}>
+              <span className="pl-toggle__knob" />
+            </button>
+          </div>
+          {publicStatus && (
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: -8, marginBottom: 12 }}>
+              Anyone can see this monitor's name, up/down status, and 24h uptime % at /api/public/status — no login needed. The URL, auth headers, and your account are never exposed.
+            </div>
+          )}
           {error && <div className="pl-error">{error}</div>}
           <div className="pl-modal__actions">
             <button type="button" className="pl-btn pl-btn--ghost" onClick={onClose}>Cancel</button>

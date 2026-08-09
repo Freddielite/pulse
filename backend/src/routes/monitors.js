@@ -31,7 +31,7 @@ router.post("/check-now", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains } = req.body;
+  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, public_status } = req.body;
   if (!name?.trim() || !url?.trim()) return res.status(400).json({ error: "name and url are required" });
   try {
     new URL(url); // throws on a malformed URL, caught below
@@ -41,8 +41,8 @@ router.post("/", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
-         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, public_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [
         req.userId,
         name.trim(),
@@ -55,6 +55,7 @@ router.post("/", async (req, res) => {
         !!keep_alive_target,
         group_name?.trim() || null,
         body_contains?.trim() || null,
+        !!public_status,
       ]
     );
     res.status(201).json(rows[0]);
