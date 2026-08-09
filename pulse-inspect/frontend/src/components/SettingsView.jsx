@@ -1,0 +1,99 @@
+import { useState } from "react";
+import { updateMe, testPush, logout } from "../api.js";
+import { usePush } from "../hooks/usePush.js";
+
+export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }) {
+  const push = usePush();
+  const [alertEmail, setAlertEmail] = useState(user.alert_email || "");
+  const [savingEmail, setSavingEmail] = useState(false);
+
+  async function handlePushToggle() {
+    try {
+      if (push.subscribed) {
+        await push.unsubscribe();
+        toast("Push notifications turned off.");
+      } else {
+        await push.subscribe();
+        toast("Push notifications turned on.");
+      }
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function handleTestPush() {
+    try {
+      await testPush();
+      toast("Test notification sent.");
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function handleSaveEmail(e) {
+    e.preventDefault();
+    setSavingEmail(true);
+    try {
+      const updated = await updateMe({ alert_email: alertEmail });
+      onUserUpdated(updated);
+      toast("Alert email saved.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setSavingEmail(false);
+    }
+  }
+
+  async function handleLogout() {
+    await logout();
+    onLoggedOut();
+  }
+
+  return (
+    <div>
+      <div className="pl-panel">
+        <div className="pl-settings-row">
+          <div>
+            <div className="pl-settings-row__title">Push notifications</div>
+            <div className="pl-settings-row__desc">
+              {push.supported ? "Get notified the moment something goes down." : "Not supported in this browser."}
+            </div>
+          </div>
+          {push.supported && (
+            <button className={`pl-toggle ${push.subscribed ? "on" : ""}`} onClick={handlePushToggle} disabled={push.busy}>
+              <span className="pl-toggle__knob" />
+            </button>
+          )}
+        </div>
+        {push.subscribed && (
+          <div className="pl-settings-row">
+            <div className="pl-settings-row__desc">Send a test notification</div>
+            <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleTestPush}>Send test</button>
+          </div>
+        )}
+      </div>
+
+      <div className="pl-section-label">Email alerts</div>
+      <div className="pl-panel">
+        <form onSubmit={handleSaveEmail} style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+          <div className="pl-field" style={{ flex: 1, marginBottom: 0 }}>
+            <label>Send downtime alerts to</label>
+            <input type="email" value={alertEmail} onChange={(e) => setAlertEmail(e.target.value)} required />
+          </div>
+          <button className="pl-btn pl-btn--sm" type="submit" disabled={savingEmail}>{savingEmail ? "Saving..." : "Save"}</button>
+        </form>
+      </div>
+
+      <div className="pl-section-label">Account</div>
+      <div className="pl-panel">
+        <div className="pl-settings-row">
+          <div>
+            <div className="pl-settings-row__title">{user.email}</div>
+            <div className="pl-settings-row__desc">Logged in</div>
+          </div>
+          <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleLogout}>Log out</button>
+        </div>
+      </div>
+    </div>
+  );
+}
