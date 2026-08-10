@@ -3,6 +3,7 @@ import { runHttpCheck } from "./httpCheck.js";
 import { getSslExpiry, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
+import { scanSite } from "./scanner.js";
 
 // How often the (best-effort, rate-limited) cert/domain check runs per
 // monitor. Far coarser than the uptime check: a handshake + WHOIS lookup
@@ -13,6 +14,11 @@ const CERT_CHECK_INTERVAL_HOURS = 24;
 // big backlog (e.g. right after adding a batch of monitors) can't turn a
 // single run into a multi-minute WHOIS marathon.
 const MAX_CERT_CHECKS_PER_RUN = 5;
+// Same reasoning as the cert sweep above: a header/exposed-path scan is
+// several requests per monitor, so it runs on the same daily cadence and
+// same per-run cap rather than every cron tick.
+const SECURITY_SCAN_INTERVAL_HOURS = 24;
+const MAX_SECURITY_SCANS_PER_RUN = 5;
 // How often a monitor that's still down gets another alert, instead of
 // staying silent after the initial one. An hour balances "you'd actually
 // want to know it's still broken" against not turning a multi-hour outage
@@ -162,6 +168,41 @@ export async function runCertSweep({ userId = null, limit = MAX_CERT_CHECKS_PER_
   }
 
   return certChecks;
+}
+
+// Same split and same rate-limiting shape as runCertSweep above: due
+// monitors are whichever haven't been scanned in the last
+// SECURITY_SCAN_INTERVAL_HOURS, capped per run so a big backlog can't turn
+// one cron tick into a multi-minute scan marathon.
+export async function runSecuritySweep({ userId = null, limit = MAX_SECURITY_SCANS_PER_RUN } = {}) {
+  const conditions = [
+    `active = true`,
+    `(security_scanned_at IS NULL OR security_scanned_at <= now() - interval '${SECURITY_SCAN_INTERVAL_HOURS} hours')`,
+  ];
+  const params = [];
+  if (userId) {
+    params.push(userId);
+    conditions.push(`user_id = $${params.length}`);
+  }
+  params.push(limit);
+
+  const { rows: scanDue } = await pool.query(
+    `SELECT * FROM monitors WHERE ${conditions.join(" AND ")} LIMIT $${params.length}`,
+    params
+  );
+
+  let scansRun = 0;
+  for (const monitor of scanDue) {
+    const result = await scanSite(monitor.url);
+    await pool.query(
+      `INSERT INTO security_scans (monitor_id, score, findings) VALUES ($1, $2, $3)`,
+      [monitor.id, result.score, JSON.stringify(result.findings)]
+    );
+    await pool.query(`UPDATE monitors SET security_scanned_at = now() WHERE id = $1`, [monitor.id]);
+    scansRun += 1;
+  }
+
+  return scansRun;
 }
 
 async function alertDown(monitor, result, incidentId) {

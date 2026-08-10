@@ -52,6 +52,11 @@ export async function migrate() {
       domain_expires_at    TIMESTAMPTZ,
       cert_checked_at      TIMESTAMPTZ,
       cert_check_error     TEXT,
+      -- Rate limits the security scan the same way cert_checked_at rate
+      -- limits the SSL/domain lookup: a header/exposed-path scan is
+      -- several requests per monitor, so re-running it every tick would
+      -- waste far more than the finding could ever change day to day.
+      security_scanned_at  TIMESTAMPTZ,
       -- NULL means never snoozed / not currently snoozed. A future
       -- timestamp pauses both the scheduled tick and the "Check now"
       -- button for this monitor until it passes, at which point checks
@@ -80,10 +85,7 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMPTZ;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS group_name TEXT;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS body_contains TEXT;
-    -- Opt-in flag: only monitors with this set to true are ever returned by
-    -- the unauthenticated /api/public/status endpoint. Defaults to false so
-    -- nothing becomes public by accident.
-    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS public_status BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS security_scanned_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS checks (
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -126,5 +128,37 @@ export async function migrate() {
       auth          TEXT NOT NULL,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Passive header/exposed-path scan results per monitor. Private by
+    -- construction: every read of this table goes through a route scoped to
+    -- monitors.user_id (see routes/monitors.js), there's no public endpoint
+    -- for it the way wyntek-status briefly exposed a score publicly.
+    CREATE TABLE IF NOT EXISTS security_scans (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      monitor_id  UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      scanned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      score       INTEGER NOT NULL, -- 0-100
+      findings    JSONB NOT NULL    -- array of {check, pass, detail}
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_security_scans_monitor_time ON security_scans(monitor_id, scanned_at DESC);
+
+    -- Pageview beacon events. Written by an anonymous script embedded on
+    -- the monitored site itself (see routes/beacon.js), so this table is
+    -- the one place in the schema that accepts writes from outside a
+    -- logged-in session. No IP address, no cookie, no cross-site
+    -- identifier is stored, matching the privacy stance the beacon had
+    -- when it lived in wyntek-status.
+    CREATE TABLE IF NOT EXISTS pageviews (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      monitor_id  UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      path        TEXT NOT NULL,
+      referrer    TEXT,
+      browser     TEXT,
+      os          TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pageviews_monitor_time ON pageviews(monitor_id, created_at DESC);
   `);
 }

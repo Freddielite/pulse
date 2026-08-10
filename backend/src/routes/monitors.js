@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { runUptimeChecks } from "../lib/checkRunner.js";
+import { scanSite } from "../lib/scanner.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -31,7 +32,7 @@ router.post("/check-now", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, public_status } = req.body;
+  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains } = req.body;
   if (!name?.trim() || !url?.trim()) return res.status(400).json({ error: "name and url are required" });
   try {
     new URL(url); // throws on a malformed URL, caught below
@@ -41,8 +42,8 @@ router.post("/", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
-         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, public_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
       [
         req.userId,
         name.trim(),
@@ -55,7 +56,6 @@ router.post("/", async (req, res) => {
         !!keep_alive_target,
         group_name?.trim() || null,
         body_contains?.trim() || null,
-        !!public_status,
       ]
     );
     res.status(201).json(rows[0]);
@@ -66,7 +66,7 @@ router.post("/", async (req, res) => {
 });
 
 router.patch("/:id", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, active, group_name, body_contains, public_status } = req.body;
+  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, active, group_name, body_contains } = req.body;
   try {
     const { rows } = await pool.query(
       `UPDATE monitors SET
@@ -81,7 +81,6 @@ router.patch("/:id", async (req, res) => {
          active = COALESCE($11, active),
          group_name = $12,
          body_contains = $13,
-         public_status = COALESCE($14, public_status),
          updated_at = now()
        WHERE id = $1 AND user_id = $2 RETURNING *`,
       [
@@ -98,7 +97,6 @@ router.patch("/:id", async (req, res) => {
         active,
         group_name?.trim() || null,
         body_contains?.trim() || null,
-        public_status,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
@@ -135,30 +133,6 @@ router.post("/:id/unsnooze", async (req, res) => {
   res.json(rows[0]);
 });
 
-// Bulk versions of the same action, scoped to every active monitor the
-// user owns at once - useful for something like taking your whole setup
-// down for a broader maintenance window instead of clicking into each
-// monitor individually.
-router.post("/snooze-all", async (req, res) => {
-  const minutes = Number(req.body.minutes);
-  if (!minutes || minutes <= 0) return res.status(400).json({ error: "minutes must be a positive number" });
-  const { rows } = await pool.query(
-    `UPDATE monitors SET snoozed_until = now() + ($2 || ' minutes')::interval, updated_at = now()
-     WHERE user_id = $1 AND active = true RETURNING id`,
-    [req.userId, minutes]
-  );
-  res.json({ snoozed: rows.length });
-});
-
-router.post("/unsnooze-all", async (req, res) => {
-  const { rows } = await pool.query(
-    `UPDATE monitors SET snoozed_until = NULL, updated_at = now()
-     WHERE user_id = $1 AND snoozed_until IS NOT NULL RETURNING id`,
-    [req.userId]
-  );
-  res.json({ unsnoozed: rows.length });
-});
-
 router.delete("/:id", async (req, res) => {
   const { rows } = await pool.query(
     `DELETE FROM monitors WHERE id = $1 AND user_id = $2 RETURNING id`,
@@ -188,6 +162,71 @@ router.get("/:id/incidents", async (req, res) => {
     [req.params.id]
   );
   res.json(rows);
+});
+
+// Private by construction: this only reaches security_scans through a
+// route scoped to the caller's own monitor.user_id, same as every other
+// per-monitor route here. There's no public equivalent of this endpoint.
+router.get("/:id/security", async (req, res) => {
+  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const { rows } = await pool.query(
+    `SELECT * FROM security_scans WHERE monitor_id = $1 ORDER BY scanned_at DESC LIMIT 1`,
+    [req.params.id]
+  );
+  if (rows.length === 0) return res.json(null);
+  res.json(rows[0]);
+});
+
+// Force a scan right now, ignoring the 24h cadence, the same "I don't want
+// to wait" escape hatch check-now gives uptime checks.
+router.post("/:id/security/run", async (req, res) => {
+  const owns = await pool.query(`SELECT * FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const monitor = owns.rows[0];
+
+  const result = await scanSite(monitor.url);
+  const { rows } = await pool.query(
+    `INSERT INTO security_scans (monitor_id, score, findings) VALUES ($1, $2, $3) RETURNING *`,
+    [monitor.id, result.score, JSON.stringify(result.findings)]
+  );
+  await pool.query(`UPDATE monitors SET security_scanned_at = now() WHERE id = $1`, [monitor.id]);
+  res.json(rows[0]);
+});
+
+// Private, same as everything else here: this reads pageviews scoped to the
+// caller's own monitor.user_id. The beacon that WRITES to pageviews (see
+// routes/beacon.js) has to be public since it's called from anonymous
+// visitors' browsers, but nothing about reading the results is public -
+// there's no equivalent of this endpoint reachable without a session.
+router.get("/:id/traffic", async (req, res) => {
+  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+
+  const [totalRow, topPaths, browsers] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*)::int as views FROM pageviews WHERE monitor_id = $1 AND created_at >= now() - interval '24 hours'`,
+      [req.params.id]
+    ),
+    pool.query(
+      `SELECT path, COUNT(*)::int as views FROM pageviews
+       WHERE monitor_id = $1 AND created_at >= now() - interval '7 days'
+       GROUP BY path ORDER BY views DESC LIMIT 5`,
+      [req.params.id]
+    ),
+    pool.query(
+      `SELECT browser, COUNT(*)::int as views FROM pageviews
+       WHERE monitor_id = $1 AND created_at >= now() - interval '7 days'
+       GROUP BY browser ORDER BY views DESC LIMIT 5`,
+      [req.params.id]
+    ),
+  ]);
+
+  res.json({
+    views24h: totalRow.rows[0].views,
+    topPaths: topPaths.rows,
+    browsers: browsers.rows,
+  });
 });
 
 // Uptime percentage over rolling windows, computed from the checks log

@@ -1,20 +1,11 @@
 import { useState } from "react";
 import MonitorCard from "./MonitorCard.jsx";
-import { checkNow, snoozeAllMonitors, unsnoozeAllMonitors } from "../api.js";
-
-const SNOOZE_OPTIONS = [
-  { label: "15m", minutes: 15 },
-  { label: "1h", minutes: 60 },
-  { label: "4h", minutes: 240 },
-  { label: "24h", minutes: 1440 },
-];
+import { checkNow } from "../api.js";
 
 export default function Dashboard({ monitors, onSelect, onAdd, onChanged, toast }) {
   const [checking, setChecking] = useState(false);
-  const [snoozing, setSnoozing] = useState(false);
   const upCount = monitors.filter((m) => m.current_status === "up").length;
   const downCount = monitors.filter((m) => m.current_status === "down").length;
-  const anySnoozed = monitors.some((m) => m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now());
 
   async function handleCheckNow() {
     setChecking(true);
@@ -26,32 +17,6 @@ export default function Dashboard({ monitors, onSelect, onAdd, onChanged, toast 
       toast(err.message, "error");
     } finally {
       setChecking(false);
-    }
-  }
-
-  async function handleSnoozeAll(minutes) {
-    setSnoozing(true);
-    try {
-      const result = await snoozeAllMonitors(minutes);
-      toast(`Snoozed ${result.snoozed} monitor${result.snoozed === 1 ? "" : "s"}.`);
-      onChanged();
-    } catch (err) {
-      toast(err.message, "error");
-    } finally {
-      setSnoozing(false);
-    }
-  }
-
-  async function handleUnsnoozeAll() {
-    setSnoozing(true);
-    try {
-      const result = await unsnoozeAllMonitors();
-      toast(`Unsnoozed ${result.unsnoozed} monitor${result.unsnoozed === 1 ? "" : "s"}.`);
-      onChanged();
-    } catch (err) {
-      toast(err.message, "error");
-    } finally {
-      setSnoozing(false);
     }
   }
 
@@ -79,28 +44,6 @@ export default function Dashboard({ monitors, onSelect, onAdd, onChanged, toast 
           <button className="pl-btn" onClick={onAdd}>Add monitor</button>
         </div>
       </div>
-
-      {monitors.length > 0 && (
-        <div className="pl-panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
-          {anySnoozed ? (
-            <>
-              <span style={{ fontSize: 13, color: "var(--ink-dim)" }}>Some monitors are snoozed.</span>
-              <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleUnsnoozeAll} disabled={snoozing}>Unsnooze all</button>
-            </>
-          ) : (
-            <>
-              <span style={{ fontSize: 13, color: "var(--ink-dim)" }}>Snooze all monitors</span>
-              <div style={{ display: "flex", gap: 6 }}>
-                {SNOOZE_OPTIONS.map((opt) => (
-                  <button key={opt.minutes} className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleSnoozeAll(opt.minutes)} disabled={snoozing}>
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
 
       {monitors.length === 0 ? (
         <div className="pl-panel pl-empty">

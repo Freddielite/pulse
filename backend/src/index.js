@@ -8,7 +8,7 @@ import authRouter from "./routes/auth.js";
 import monitorsRouter from "./routes/monitors.js";
 import pushRouter from "./routes/push.js";
 import cronRouter from "./routes/cron.js";
-import publicRouter from "./routes/public.js";
+import beaconRouter from "./routes/beacon.js";
 
 const app = express();
 
@@ -46,7 +46,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/monitors", monitorsRouter);
 app.use("/api/push", pushRouter);
 app.use("/api/cron", cronRouter);
-app.use("/api/public", publicRouter);
+app.use("/api", beaconRouter);
 
 const PORT = process.env.PORT || 4000;
 
