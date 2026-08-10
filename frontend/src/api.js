@@ -44,6 +44,8 @@ export const createMonitor = (payload) => apiFetch("/monitors", { method: "POST"
 export const updateMonitor = (id, payload) => apiFetch(`/monitors/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 export const snoozeMonitor = (id, minutes) => apiFetch(`/monitors/${id}/snooze`, { method: "POST", body: JSON.stringify({ minutes }) });
 export const unsnoozeMonitor = (id) => apiFetch(`/monitors/${id}/unsnooze`, { method: "POST" });
+export const snoozeAllMonitors = (minutes) => apiFetch("/monitors/snooze-all", { method: "POST", body: JSON.stringify({ minutes }) });
+export const unsnoozeAllMonitors = () => apiFetch("/monitors/unsnooze-all", { method: "POST" });
 export const deleteMonitor = (id) => apiFetch(`/monitors/${id}`, { method: "DELETE" });
 export const getMonitorChecks = (id, limit = 200) => apiFetch(`/monitors/${id}/checks?limit=${limit}`);
 export const getMonitorIncidents = (id) => apiFetch(`/monitors/${id}/incidents`);

@@ -133,6 +133,30 @@ router.post("/:id/unsnooze", async (req, res) => {
   res.json(rows[0]);
 });
 
+// Bulk versions of the same action, scoped to every active monitor the
+// user owns at once - useful for something like taking your whole setup
+// down for a broader maintenance window instead of clicking into each
+// monitor individually.
+router.post("/snooze-all", async (req, res) => {
+  const minutes = Number(req.body.minutes);
+  if (!minutes || minutes <= 0) return res.status(400).json({ error: "minutes must be a positive number" });
+  const { rows } = await pool.query(
+    `UPDATE monitors SET snoozed_until = now() + ($2 || ' minutes')::interval, updated_at = now()
+     WHERE user_id = $1 AND active = true RETURNING id`,
+    [req.userId, minutes]
+  );
+  res.json({ snoozed: rows.length });
+});
+
+router.post("/unsnooze-all", async (req, res) => {
+  const { rows } = await pool.query(
+    `UPDATE monitors SET snoozed_until = NULL, updated_at = now()
+     WHERE user_id = $1 AND snoozed_until IS NOT NULL RETURNING id`,
+    [req.userId]
+  );
+  res.json({ unsnoozed: rows.length });
+});
+
 router.delete("/:id", async (req, res) => {
   const { rows } = await pool.query(
     `DELETE FROM monitors WHERE id = $1 AND user_id = $2 RETURNING id`,
