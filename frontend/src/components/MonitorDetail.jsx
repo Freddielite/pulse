@@ -4,6 +4,7 @@ import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDail
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
+import { useIsMobile } from "../hooks/useIsMobile.js";
 
 const SNOOZE_OPTIONS = [
   { label: "15m", minutes: 15 },
@@ -30,6 +31,28 @@ function formatDateTime(iso) {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+// A raw point per check (as often as every minute or two, over up to 200
+// checks) reads as jittery noise on a chart that's only ~300px wide on a
+// phone - there's no room for that much detail to mean anything, it just
+// looks like a spike-covered mess. Bucketing into at most maxPoints
+// groups and averaging each one keeps the actual trend (rising latency,
+// a slow patch) visible without every single sample fighting for pixels.
+// null (down/no-data) points are dropped from the average rather than
+// counted as 0ms, and a bucket that's all-null stays null so outages
+// still show as a real gap in the line, not a dip to zero.
+function downsampleChartData(data, maxPoints) {
+  if (data.length <= maxPoints) return data;
+  const bucketSize = Math.ceil(data.length / maxPoints);
+  const result = [];
+  for (let i = 0; i < data.length; i += bucketSize) {
+    const bucket = data.slice(i, i + bucketSize);
+    const withMs = bucket.filter((d) => d.ms != null);
+    const avgMs = withMs.length ? Math.round(withMs.reduce((sum, d) => sum + d.ms, 0) / withMs.length) : null;
+    result.push({ time: bucket[bucket.length - 1].time, ms: avgMs });
+  }
+  return result;
+}
+
 export default function MonitorDetail({ monitor, existingGroups = [], onBack, onChanged, toast }) {
   const [checks, setChecks] = useState([]);
   const [incidents, setIncidents] = useState([]);
@@ -40,6 +63,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
+  const isMobile = useIsMobile();
 
   const snoozed = !!monitor.snoozed_until && new Date(monitor.snoozed_until).getTime() > Date.now();
 
@@ -150,10 +174,13 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
     URL.revokeObjectURL(url);
   }
 
-  const chartData = checks.map((c) => ({
+  const rawChartData = checks.map((c) => ({
     time: new Date(c.checked_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
     ms: c.status === "up" ? c.response_ms : null,
   }));
+  // Narrower screens get fewer buckets - there's simply less width for
+  // points to occupy before they start overlapping into noise.
+  const chartData = downsampleChartData(rawChartData, isMobile ? 24 : 60);
 
   return (
     <div>
