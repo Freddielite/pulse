@@ -30,8 +30,12 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
 
   async function handleTestPush() {
     try {
-      await testPush();
-      toast("Test notification sent.");
+      const result = await testPush();
+      if (result.failed > 0) {
+        toast(`Delivered to ${result.sent} of ${result.sent + result.failed} device(s) - one or more subscriptions may be stale.`, "error");
+      } else {
+        toast(result.sent > 1 ? `Test notification sent to ${result.sent} devices.` : "Test notification sent.");
+      }
     } catch (err) {
       toast(err.message, "error");
     }

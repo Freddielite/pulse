@@ -1,3 +1,5 @@
+import { latencyColorForMs } from "../lib/latency.js";
+
 function timeAgo(iso) {
   if (!iso) return "never checked";
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -38,11 +40,7 @@ function latencyColor(monitor) {
   // green, since either would misrepresent it as current information.
   if (isSnoozed(monitor)) return "var(--ink-dim)";
   if (monitor.current_status === "down") return "var(--alert)";
-  const ms = monitor.last_response_ms;
-  if (ms == null) return "var(--ink)";
-  if (ms < 300) return "var(--signal)";
-  if (ms < 1500) return "var(--amber)";
-  return "var(--alert)";
+  return latencyColorForMs(monitor.last_response_ms);
 }
 
 export default function MonitorCard({ monitor, onClick }) {

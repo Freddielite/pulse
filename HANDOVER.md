@@ -94,6 +94,40 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Response-time chart tooltip colors by actual latency, not the
+  line's fixed color.** The `ms : 431` figure in the chart tooltip used
+  to inherit recharts' default per-series coloring, which is just the
+  line's static stroke - so it read as green even on a genuinely slow
+  431ms point. It's now a custom tooltip (`ResponseTimeTooltip` in
+  `MonitorDetail.jsx`) that colors that number with the same green /
+  amber / red bands `MonitorCard.jsx` already uses for the latency stat
+  on each monitor card. Pulled the threshold logic out of `MonitorCard.jsx`
+  into `lib/latency.js` (`latencyColorForMs(ms)`) so both places share one
+  definition instead of two copies drifting apart later.
+- **Push test/send now reports real delivery, not just "request
+  received."** `sendPushToUser()` used to swallow every per-subscription
+  failure and return nothing, so `POST /api/push/test` always answered
+  `{ ok: true }` even when zero notifications actually reached a device -
+  the exact "it says sent but nothing arrives" report that prompted this.
+  It now returns `{ total, sent, failed, configured }`, and `/test` turns
+  that into a real error when appropriate: 503 if VAPID isn't configured
+  at all, 400 if this device has no subscription row, 502 if the push
+  service rejected every send. The Settings toast reflects genuine
+  outcomes now, including a partial-failure case ("delivered to 1 of 2
+  devices"). The most common real-world cause behind a silent failure:
+  the browser/OS drops a subscription on its own after a long idle period
+  or a reinstall, with no way for the server to know until the next send
+  attempt fails - toggling push off and back on gets a fresh one.
+- **Mobile response-time chart decluttered.** The chart in
+  `MonitorDetail.jsx` was plotting one point per check - up to 200 of
+  them - which reads as jittery noise on a narrow screen with nowhere
+  near that many pixels of width to render it meaningfully. It's now
+  bucketed and averaged down to at most 60 points on desktop / 24 on
+  mobile (`downsampleChartData()`, viewport detected via the new
+  `hooks/useIsMobile.js`). Down/no-data points are excluded from each
+  bucket's average rather than counted as 0ms, and an all-down bucket
+  stays null, so real outages still show as a gap in the line instead of
+  a dip to zero.
 - **Telegram alerts: env-var chat ID.** `TELEGRAM_CHAT_ID` now resolves
   ahead of `users.telegram_chat_id` (`resolveChatId()` in
   `lib/telegram.js`), so a single-user deployment can wire up alerts

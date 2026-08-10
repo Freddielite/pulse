@@ -29,8 +29,11 @@ router.post("/unsubscribe", async (req, res) => {
 });
 
 router.post("/test", async (req, res) => {
-  await sendPushToUser(req.userId, { title: "Pulse", body: "Test notification. Push is wired up correctly." });
-  res.json({ ok: true });
+  const result = await sendPushToUser(req.userId, { title: "Pulse", body: "Test notification. Push is wired up correctly." });
+  if (!result.configured) return res.status(503).json({ error: "push isn't configured on the server" });
+  if (result.total === 0) return res.status(400).json({ error: "no active push subscription found for this device - try toggling push off and back on" });
+  if (result.sent === 0) return res.status(502).json({ error: "the push service rejected delivery - try toggling push off and back on to get a fresh subscription" });
+  res.json({ ok: true, sent: result.sent, failed: result.failed });
 });
 
 export default router;

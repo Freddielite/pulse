@@ -5,6 +5,7 @@ import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
 import { useIsMobile } from "../hooks/useIsMobile.js";
+import { latencyColorForMs } from "../lib/latency.js";
 
 const SNOOZE_OPTIONS = [
   { label: "15m", minutes: 15 },
@@ -51,6 +52,24 @@ function downsampleChartData(data, maxPoints) {
     result.push({ time: bucket[bucket.length - 1].time, ms: avgMs });
   }
   return result;
+}
+
+// Custom tooltip content (rather than recharts' default + itemStyle) so
+// the ms figure is colored by what that specific value actually means -
+// the same green/amber/red bands used everywhere else latency shows up -
+// instead of always inheriting the line's fixed green regardless of
+// whether that point was fast or slow.
+function ResponseTimeTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const ms = payload[0].value;
+  return (
+    <div style={{ background: "#0e1512", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, fontSize: 12, padding: "8px 10px" }}>
+      <div style={{ color: "var(--ink-dim)", marginBottom: 2 }}>{label}</div>
+      <div style={{ color: latencyColorForMs(ms), fontWeight: 600 }}>
+        {ms != null ? `ms : ${ms}` : "no data"}
+      </div>
+    </div>
+  );
 }
 
 export default function MonitorDetail({ monitor, existingGroups = [], onBack, onChanged, toast }) {
@@ -253,10 +272,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
               <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
               <XAxis dataKey="time" tick={{ fontSize: 10, fill: "var(--ink-faint)" }} axisLine={false} tickLine={false} minTickGap={40} />
               <YAxis tick={{ fontSize: 10, fill: "var(--ink-faint)" }} axisLine={false} tickLine={false} unit="ms" width={44} />
-              <Tooltip
-                contentStyle={{ background: "#0e1512", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ color: "var(--ink-dim)" }}
-              />
+              <Tooltip content={<ResponseTimeTooltip />} />
               <Line type="monotone" dataKey="ms" stroke="#3ddc84" strokeWidth={1.75} dot={false} connectNulls={false} />
             </LineChart>
           </ResponsiveContainer>
