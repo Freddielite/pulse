@@ -109,6 +109,31 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS security_scanned_at TIMESTAMPTZ;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS alert_after_failures INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+    -- 'http' (default): the original single-request check via httpCheck.js.
+    -- 'synthetic': a short ordered sequence of HTTP requests (login, then
+    -- hit a gated page, etc.) via syntheticCheck.js - see synthetic_steps.
+    -- monitors.url stays required either way: for a synthetic monitor it's
+    -- just the "representative" URL used for SSL/domain checks and shown
+    -- in the list, not itself one of the steps.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS monitor_type TEXT NOT NULL DEFAULT 'http';
+    -- Array of { method, url, body, expected_status, body_contains, extract }
+    -- steps, only read when monitor_type = 'synthetic'. extract is an
+    -- optional { name, regex } that captures group 1 (or the whole match)
+    -- of the step's response body into a named variable, which later
+    -- steps can reference in their url/body as {{name}} - the mechanism a
+    -- login flow needs to carry a CSRF token or session id forward.
+    -- Deliberately JSONB rather than a child table: steps are only ever
+    -- read/written as a whole ordered unit with the monitor that owns
+    -- them, never queried or joined on individually.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS synthetic_steps JSONB;
+    -- Content-diff monitoring, http-type monitors only. content_hash is
+    -- a sha256 of the last-seen response body; a mismatch on a later
+    -- "up" check fires an alert and the new hash becomes the baseline,
+    -- so it self-quiets after one nudge per actual change rather than
+    -- alerting every check until someone manually re-baselines it.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_diff_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_hash TEXT;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_changed_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS checks (
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -165,5 +190,25 @@ export async function migrate() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_security_scans_monitor_time ON security_scans(monitor_id, scanned_at DESC);
+
+    -- Bearer tokens for scripting against Pulse directly (cron jobs, other
+    -- tools) instead of only through the browser session. Only the hash is
+    -- stored - the raw token is generated once, returned once in the POST
+    -- response, and is unrecoverable after that, same shape as a password.
+    -- token_prefix keeps enough of the raw value (never secret on its own -
+    -- it's a small fraction of a long random token) visible in the UI so a
+    -- user can tell their tokens apart without the full value ever being
+    -- stored or shown again.
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name          TEXT NOT NULL,
+      token_hash    TEXT NOT NULL UNIQUE,
+      token_prefix  TEXT NOT NULL,
+      last_used_at  TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id);
   `);
 }

@@ -207,7 +207,14 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
 
       <div className="pl-detail-head">
         <div>
-          <div className="pl-detail-title">{monitor.name}</div>
+          <div className="pl-detail-title">
+            {monitor.name}
+            {monitor.monitor_type === "synthetic" && (
+              <span className="pl-badge pl-badge--muted" style={{ marginLeft: 8, verticalAlign: "middle" }}>
+                multi-step - {(monitor.synthetic_steps || []).length} step{(monitor.synthetic_steps || []).length === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
           <div className="pl-detail-url">{monitor.url}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -294,6 +301,18 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
           <span>{monitor.domain_expires_at ? formatDate(monitor.domain_expires_at) : "Unknown (best-effort lookup)"}</span>
         </div>
       </div>
+
+      {monitor.content_diff_enabled && (
+        <>
+          <div className="pl-section-label">Content monitoring</div>
+          <div className="pl-panel">
+            <div className="pl-expiry-row">
+              <span className="pl-expiry-row__label">Last content change detected</span>
+              <span>{monitor.content_changed_at ? formatDateTime(monitor.content_changed_at) : "No change since monitoring started"}</span>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="pl-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span>Security scan</span>

@@ -94,6 +94,48 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **API tokens.** Bearer-token auth for scripting against Pulse directly
+  (cron jobs, other tools) alongside the existing browser session -
+  `requireAuth.js` now accepts either. New `api_tokens` table (hash only,
+  never the raw value - same shape as a password), `lib/apiTokens.js` for
+  generate/hash, `routes/tokens.js` for list/create/revoke. Settings has a
+  new "API tokens" section: name one, copy it once (it's never shown
+  again after that response), revoke it later. `last_used_at` updates in
+  the same query as the auth lookup so a token that's actually in use
+  doesn't cost a second write per request.
+- **Content-diff monitoring**, http-type monitors only (toggle in the
+  monitor form). `httpCheck.js` hashes the response body - reusing the
+  same read `body_contains` already does, not a second fetch - and
+  `checkRunner.js` compares it against the last-seen hash on each passing
+  check. First time seeing a hash, it's just the baseline, no alert. A
+  mismatch fires one alert *and* immediately becomes the new baseline, so
+  a legitimate deploy costs a single nudge rather than repeating on every
+  check until someone manually re-baselines it. Shows up in
+  `MonitorDetail.jsx` as a "Content monitoring" panel with the
+  last-changed timestamp, when the monitor has it turned on.
+- **Multi-step synthetic checks** - a new `monitor_type` ('http' default,
+  'synthetic'), with steps stored as JSONB on `monitors.synthetic_steps`.
+  **Scope note, called out explicitly because it's a real trade-off, not
+  a hidden shortcut:** this is a sequence of plain HTTP requests
+  (`lib/syntheticCheck.js`) carrying cookies and `{{name}}`-substituted
+  extracted variables from one step to the next - not a headless browser.
+  No JS execution, no client-side rendering. It covers "log in, follow
+  the session, hit a gated page, assert on the result" (most of what
+  "returns 200 but is actually broken" means for a typical backend) at a
+  fraction of the operational weight of running a browser engine on a
+  free-tier instance - but it won't catch a page that loads fine over the
+  wire and then breaks in the browser. If that gap ends up mattering,
+  swapping in Playwright behind the same `{ status, statusCode,
+  responseMs, errorMessage }` result shape `checkOneMonitor` already
+  expects from either check type is the upgrade path - `checkRunner.js`
+  doesn't care which one produced the result. `MonitorForm.jsx` gained a
+  check-type selector and a `SyntheticStepsEditor.jsx` for building the
+  step list (method, URL, body, expected status, body-contains, and the
+  optional extract); no per-step custom headers in that UI - the
+  monitor's single auth header applies to every step. Everything
+  downstream (checks table, uptime %, heatmap, response-time chart,
+  incidents) already worked for free, since a synthetic check's result
+  logs into the exact same `checks` row shape as an http check's does.
 - **Response-time chart tooltip colors by actual latency, not the
   line's fixed color.** The `ms : 431` figure in the chart tooltip used
   to inherit recharts' default per-series coloring, which is just the
@@ -215,15 +257,9 @@ Not built, just worth keeping track of:
 - **Scheduled maintenance windows** - pre-announce a window in advance
   instead of manually snoozing each time; useful once client deploys
   happen on a regular cadence.
-- **Content-diff monitoring** - hash the response body and alert on
-  unexpected changes outside a known deploy window. This is a real
-  defacement/compromise detector (site returns 200 but someone injected
-  something), which nothing currently checks for.
-- **Multi-step synthetic checks** - simulate a real user flow (load page
-  → log in → confirm dashboard renders) instead of just pinging a URL.
-  Catches "returns 200 but the app itself is actually broken," which a
-  status-code check can't see.
+- **A real (headless-browser) synthetic check option** - the
+  multi-step check shipped is HTTP-only (see "Recent changes" above);
+  a Playwright-backed variant that actually executes JS would close the
+  "loads but is broken client-side" gap, at real added operational cost.
 - **CSV export of check/uptime history** - for when a client asks for
   proof of downtime over a specific window.
-- **API tokens** - script against Pulse directly instead of only through
-  the UI.

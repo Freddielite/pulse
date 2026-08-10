@@ -1,10 +1,15 @@
 import { useState } from "react";
 import { createMonitor, updateMonitor } from "../api.js";
+import SyntheticStepsEditor from "./SyntheticStepsEditor.jsx";
+
+const DEFAULT_STEP = { method: "GET", url: "", expected_status: 200, body: "", body_contains: "", extract: null };
 
 export default function MonitorForm({ monitor, existingGroups = [], onClose, onSaved, toast }) {
   const editing = !!monitor;
   const [name, setName] = useState(monitor?.name || "");
   const [url, setUrl] = useState(monitor?.url || "");
+  const [monitorType, setMonitorType] = useState(monitor?.monitor_type === "synthetic" ? "synthetic" : "http");
+  const [steps, setSteps] = useState(monitor?.synthetic_steps?.length ? monitor.synthetic_steps : [DEFAULT_STEP]);
   const [method, setMethod] = useState(monitor?.method || "GET");
   const [expectedStatus, setExpectedStatus] = useState(monitor?.expected_status || 200);
   const [interval, setInterval] = useState(monitor?.check_interval_min || 5);
@@ -14,16 +19,23 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [groupName, setGroupName] = useState(monitor?.group_name || "");
   const [bodyContains, setBodyContains] = useState(monitor?.body_contains || "");
   const [alertAfterFailures, setAlertAfterFailures] = useState(monitor?.alert_after_failures || 1);
+  const [contentDiffEnabled, setContentDiffEnabled] = useState(monitor?.content_diff_enabled || false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
+    if (monitorType === "synthetic" && steps.some((s) => !s.url?.trim())) {
+      setError("Every step needs a URL.");
+      return;
+    }
     setBusy(true);
     const payload = {
       name: name.trim(),
       url: url.trim(),
+      monitor_type: monitorType,
+      synthetic_steps: monitorType === "synthetic" ? steps : undefined,
       method,
       expected_status: Number(expectedStatus),
       check_interval_min: Number(interval),
@@ -33,6 +45,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       group_name: groupName.trim() || null,
       body_contains: bodyContains.trim() || null,
       alert_after_failures: Number(alertAfterFailures) || 1,
+      content_diff_enabled: monitorType === "http" ? contentDiffEnabled : false,
     };
     try {
       if (editing) {
@@ -60,23 +73,44 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wyntek API" required autoFocus />
           </div>
           <div className="pl-field">
-            <label>URL</label>
+            <label>URL{monitorType === "synthetic" ? " (for the SSL/domain check and the list - not itself one of the steps below)" : ""}</label>
             <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/health" required />
           </div>
-          <div className="pl-field-row">
-            <div className="pl-field">
-              <label>Method</label>
-              <select value={method} onChange={(e) => setMethod(e.target.value)}>
-                <option>GET</option>
-                <option>HEAD</option>
-                <option>POST</option>
-              </select>
-            </div>
-            <div className="pl-field">
-              <label>Expected status</label>
-              <input type="number" value={expectedStatus} onChange={(e) => setExpectedStatus(e.target.value)} />
-            </div>
+          <div className="pl-field">
+            <label>Check type</label>
+            <select value={monitorType} onChange={(e) => setMonitorType(e.target.value)}>
+              <option value="http">Single request</option>
+              <option value="synthetic">Multi-step (login flow, multi-hop API check)</option>
+            </select>
+            {monitorType === "synthetic" && (
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+                Runs each step as a plain HTTP request in order, carrying cookies forward - no JS execution, so it
+                won't catch a page that loads but is broken client-side, but it will catch a login-gated flow that
+                stops returning what you expect partway through.
+              </div>
+            )}
           </div>
+          {monitorType === "http" ? (
+            <div className="pl-field-row">
+              <div className="pl-field">
+                <label>Method</label>
+                <select value={method} onChange={(e) => setMethod(e.target.value)}>
+                  <option>GET</option>
+                  <option>HEAD</option>
+                  <option>POST</option>
+                </select>
+              </div>
+              <div className="pl-field">
+                <label>Expected status</label>
+                <input type="number" value={expectedStatus} onChange={(e) => setExpectedStatus(e.target.value)} />
+              </div>
+            </div>
+          ) : (
+            <div className="pl-field">
+              <label>Steps</label>
+              <SyntheticStepsEditor steps={steps} onChange={setSteps} />
+            </div>
+          )}
           <div className="pl-field">
             <label>Check interval (minutes)</label>
             <input type="number" min={1} value={interval} onChange={(e) => setInterval(e.target.value)} />
@@ -113,17 +147,19 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               ))}
             </datalist>
           </div>
-          <div className="pl-field">
-            <label>Response should contain (optional)</label>
-            <input
-              value={bodyContains}
-              onChange={(e) => setBodyContains(e.target.value)}
-              placeholder='e.g. "ok" or a version string'
-            />
-            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
-              Fails the check if a 200 response doesn't actually contain this text.
+          {monitorType === "http" && (
+            <div className="pl-field">
+              <label>Response should contain (optional)</label>
+              <input
+                value={bodyContains}
+                onChange={(e) => setBodyContains(e.target.value)}
+                placeholder='e.g. "ok" or a version string'
+              />
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+                Fails the check if a 200 response doesn't actually contain this text.
+              </div>
             </div>
-          </div>
+          )}
           <div className="pl-field">
             <label>Alert after this many consecutive failures</label>
             <input
@@ -143,6 +179,24 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               <span className="pl-toggle__knob" />
             </button>
           </div>
+          {monitorType === "http" && (
+            <div className="pl-toggle-row">
+              <div>
+                <span>Alert me if this page's content changes unexpectedly</span>
+                <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>
+                  Hashes the response body each check. A change fires one alert and becomes the new baseline - a
+                  deploy earns a single nudge, not a repeat alert on every check after.
+                </div>
+              </div>
+              <button
+                type="button"
+                className={`pl-toggle ${contentDiffEnabled ? "on" : ""}`}
+                onClick={() => setContentDiffEnabled(!contentDiffEnabled)}
+              >
+                <span className="pl-toggle__knob" />
+              </button>
+            </div>
+          )}
           {error && <div className="pl-error">{error}</div>}
           <div className="pl-modal__actions">
             <button type="button" className="pl-btn pl-btn--ghost" onClick={onClose}>Cancel</button>

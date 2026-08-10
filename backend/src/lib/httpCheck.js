@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 const CHECK_TIMEOUT_MS = 15000;
 const RETRY_DELAY_MS = 4000;
 
@@ -6,8 +8,11 @@ function sleep(ms) {
 }
 
 // One outcome shape for every caller: never throws, always resolves with
-// { status, statusCode, responseMs, errorMessage }, so the tick loop can
-// treat a network failure and a wrong status code the same way.
+// { status, statusCode, responseMs, errorMessage, contentHash }, so the
+// tick loop can treat a network failure and a wrong status code the same
+// way. contentHash is only ever non-null when the check passed and the
+// monitor has content-diff monitoring on - see checkRunner.js for what it
+// does with it.
 async function runSingleAttempt(monitor) {
   const start = Date.now();
   const controller = new AbortController();
@@ -28,16 +33,22 @@ async function runSingleAttempt(monitor) {
 
     let up = response.status === monitor.expected_status;
     let errorMessage = up ? null : `Expected ${monitor.expected_status}, got ${response.status}`;
+    let contentHash = null;
 
     // Only read the body when there's something to check for, and only
     // when the status already passed - no point paying for a body read
-    // (or risking it hang) on a check that's already failing.
-    if (up && monitor.body_contains) {
+    // (or risking it hang) on a check that's already failing. One read
+    // serves both body_contains and the content-diff hash below, rather
+    // than reading the body twice for a monitor that has both on.
+    if (up && (monitor.body_contains || monitor.content_diff_enabled)) {
       try {
         const bodyText = await response.text();
-        if (!bodyText.includes(monitor.body_contains)) {
+        if (monitor.body_contains && !bodyText.includes(monitor.body_contains)) {
           up = false;
           errorMessage = `Response did not contain expected text: "${monitor.body_contains}"`;
+        }
+        if (up && monitor.content_diff_enabled) {
+          contentHash = crypto.createHash("sha256").update(bodyText).digest("hex");
         }
       } catch (bodyErr) {
         up = false;
@@ -51,6 +62,7 @@ async function runSingleAttempt(monitor) {
       statusCode: response.status,
       responseMs,
       errorMessage,
+      contentHash,
     };
   } catch (err) {
     const responseMs = Date.now() - start;
@@ -68,7 +80,7 @@ async function runSingleAttempt(monitor) {
     } else {
       errorMessage = err.message;
     }
-    return { status: "down", statusCode: null, responseMs, errorMessage };
+    return { status: "down", statusCode: null, responseMs, errorMessage, contentHash: null };
   } finally {
     clearTimeout(timer);
   }

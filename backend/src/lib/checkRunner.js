@@ -1,5 +1,6 @@
 import { pool } from "../db.js";
 import { runHttpCheck } from "./httpCheck.js";
+import { runSyntheticCheck } from "./syntheticCheck.js";
 import { getSslExpiry, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
@@ -52,7 +53,13 @@ export async function runUptimeChecks(monitorRows) {
 }
 
 async function checkOneMonitor(monitor) {
-  const result = await runHttpCheck(monitor);
+  // Dispatch by type: a synthetic monitor's "check" is an ordered
+  // sequence of requests (syntheticCheck.js), not the single
+  // request/response httpCheck.js handles. Both return the same
+  // { status, statusCode, responseMs, errorMessage, contentHash } shape,
+  // so everything below this line - logging, alerting, thresholds - is
+  // identical either way and doesn't need to know which kind ran.
+  const result = monitor.monitor_type === "synthetic" ? await runSyntheticCheck(monitor) : await runHttpCheck(monitor);
 
   // The raw per-check result is always logged as-is, threshold or no -
   // the checks table (and the uptime chart/heatmap built on it) should
@@ -125,6 +132,29 @@ async function checkOneMonitor(monitor) {
       );
       if (resolvedRows[0]) {
         await alertRecovered(monitor, resolvedRows[0]);
+        alerted = true;
+      }
+    }
+
+    // Content-diff monitoring: only meaningful on a passing check with a
+    // hash to compare (http-type monitors with content_diff_enabled -
+    // synthetic checks never produce one, see syntheticCheck.js). No
+    // stored hash yet means this is the first check since the toggle was
+    // turned on, so it just becomes the baseline silently - there's
+    // nothing to have "changed" relative to yet.
+    if (monitor.content_diff_enabled && result.contentHash) {
+      if (!monitor.content_hash) {
+        await pool.query(`UPDATE monitors SET content_hash = $2 WHERE id = $1`, [monitor.id, result.contentHash]);
+      } else if (monitor.content_hash !== result.contentHash) {
+        // The new hash becomes the baseline immediately, not after some
+        // separate "acknowledge" step - so a legitimate deploy earns
+        // exactly one alert, not a repeat on every check until someone
+        // manually resets it.
+        await pool.query(
+          `UPDATE monitors SET content_hash = $2, content_changed_at = now() WHERE id = $1`,
+          [monitor.id, result.contentHash]
+        );
+        await alertContentChanged(monitor);
         alerted = true;
       }
     }
@@ -266,6 +296,17 @@ async function alertRecovered(monitor, incident) {
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
   await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}\n${body}` });
+}
+
+async function alertContentChanged(monitor) {
+  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
+  const user = userRows[0];
+  if (!user) return;
+  const title = `${monitor.name} content changed`;
+  const body = "The page's content changed since the last check. If this was an expected deploy, no action needed - the new content is now the baseline for future comparisons.";
+  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+  await sendTelegramMessage({ chatId: resolveChatId(user), text: `📝 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 // Throttled to one nudge per calendar day per monitor+kind, so a 14-day

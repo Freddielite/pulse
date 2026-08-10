@@ -318,7 +318,8 @@ a {
 }
 
 .pl-field input,
-.pl-field select {
+.pl-field select,
+.pl-field textarea {
   width: 100%;
   min-width: 0;
   background: rgba(255, 255, 255, 0.04);
@@ -328,10 +329,13 @@ a {
   font-size: 14px;
   outline: none;
   transition: border-color 0.15s ease;
+  font-family: inherit;
+  resize: vertical;
 }
 
 .pl-field input:focus,
-.pl-field select:focus {
+.pl-field select:focus,
+.pl-field textarea:focus {
   border-color: var(--signal);
 }
 

@@ -7,6 +7,26 @@ import { scanSite } from "../lib/scanner.js";
 const router = Router();
 router.use(requireAuth);
 
+// Shared by both create and update. Only enforced when the monitor is (or
+// is being changed to) 'synthetic' - an 'http' monitor's steps are simply
+// ignored, so there's nothing to validate for it.
+function validateSyntheticSteps(type, steps) {
+  if (type !== "synthetic") return null;
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return "a synthetic check needs at least one step";
+  }
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    if (!step?.url?.trim()) return `step ${i + 1} needs a URL`;
+    try {
+      new URL(step.url.includes("{{") ? step.url.replace(/\{\{[^}]*\}\}/g, "x") : step.url);
+    } catch {
+      return `step ${i + 1}'s URL doesn't look valid`;
+    }
+  }
+  return null;
+}
+
 router.get("/", async (req, res) => {
   const { rows } = await pool.query(
     `SELECT * FROM monitors WHERE user_id = $1 ORDER BY created_at ASC`,
@@ -32,7 +52,10 @@ router.post("/check-now", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures } = req.body;
+  const {
+    name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
+    group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps,
+  } = req.body;
   if (!name?.trim() || !url?.trim()) return res.status(400).json({ error: "name and url are required" });
   try {
     new URL(url); // throws on a malformed URL, caught below
@@ -42,11 +65,14 @@ router.post("/", async (req, res) => {
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
   }
+  const type = monitor_type === "synthetic" ? "synthetic" : "http";
+  const stepsError = validateSyntheticSteps(type, synthetic_steps);
+  if (stepsError) return res.status(400).json({ error: stepsError });
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
-         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
       [
         req.userId,
         name.trim(),
@@ -60,6 +86,9 @@ router.post("/", async (req, res) => {
         group_name?.trim() || null,
         body_contains?.trim() || null,
         Number(alert_after_failures) || 1,
+        !!content_diff_enabled,
+        type,
+        type === "synthetic" ? JSON.stringify(synthetic_steps) : null,
       ]
     );
     res.status(201).json(rows[0]);
@@ -70,11 +99,21 @@ router.post("/", async (req, res) => {
 });
 
 router.patch("/:id", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, active, group_name, body_contains, alert_after_failures } = req.body;
+  const {
+    name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
+    active, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps,
+  } = req.body;
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
   }
+  if (monitor_type !== undefined) {
+    const stepsError = validateSyntheticSteps(monitor_type === "synthetic" ? "synthetic" : "http", synthetic_steps);
+    if (stepsError) return res.status(400).json({ error: stepsError });
+  }
   try {
+    const willTouchSteps = monitor_type !== undefined;
+    const nextType = monitor_type === undefined ? null : (monitor_type === "synthetic" ? "synthetic" : "http");
+    const nextSteps = monitor_type === "synthetic" ? JSON.stringify(synthetic_steps) : null;
     const { rows } = await pool.query(
       `UPDATE monitors SET
          name = COALESCE($3, name),
@@ -89,6 +128,9 @@ router.patch("/:id", async (req, res) => {
          group_name = $12,
          body_contains = $13,
          alert_after_failures = COALESCE($14, alert_after_failures),
+         content_diff_enabled = COALESCE($15, content_diff_enabled),
+         monitor_type = COALESCE($16, monitor_type),
+         synthetic_steps = CASE WHEN $17 THEN $18::jsonb ELSE synthetic_steps END,
          updated_at = now()
        WHERE id = $1 AND user_id = $2 RETURNING *`,
       [
@@ -106,6 +148,10 @@ router.patch("/:id", async (req, res) => {
         group_name?.trim() || null,
         body_contains?.trim() || null,
         alert_after_failures ? Number(alert_after_failures) : null,
+        content_diff_enabled === undefined ? null : !!content_diff_enabled,
+        nextType,
+        willTouchSteps,
+        nextSteps,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });

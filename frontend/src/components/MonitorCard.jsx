@@ -62,6 +62,7 @@ export default function MonitorCard({ monitor, onClick }) {
       <div className="pl-monitor-card__main">
         <div className="pl-monitor-card__name">
           {monitor.name}
+          {monitor.monitor_type === "synthetic" && <span className="pl-badge pl-badge--muted" style={{ marginLeft: 8 }}>multi-step</span>}
           {snoozed && <span className="pl-badge pl-badge--muted" style={{ marginLeft: 8 }}>snoozed {timeUntil(monitor.snoozed_until)}</span>}
           {monitor.keep_alive_target && <span className="pl-badge pl-badge--signal" style={{ marginLeft: 8 }}>keep-alive</span>}
           {expiringSoon && <span className="pl-badge pl-badge--amber" style={{ marginLeft: 8 }}>expiring soon</span>}
