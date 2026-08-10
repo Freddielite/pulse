@@ -55,7 +55,8 @@ curls the same URL works identically.
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | For push | Generate with `npm run gen-vapid` in `backend/` |
 | `VAPID_SUBJECT` | For push | `mailto:you@example.com` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | For email | Any SMTP provider. Gmail app password, Resend, Mailgun, etc. |
-| `TELEGRAM_BOT_TOKEN` | For Telegram | One bot for the whole instance, from [@BotFather](https://t.me/BotFather). Each user then adds their own chat ID in Settings. |
+| `TELEGRAM_BOT_TOKEN` | For Telegram | One bot for the whole instance, from [@BotFather](https://t.me/BotFather). |
+| `TELEGRAM_CHAT_ID` | Optional, for Telegram | Hardcodes a single destination chat for the whole deployment. Simplest setup for a single-user instance - set this and skip per-user chat IDs entirely. If unset, falls back to each user's own `telegram_chat_id` (see below), for deployments with more than one account. |
 
 ### Frontend (Vercel)
 
@@ -93,6 +94,19 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Telegram alerts: env-var chat ID.** `TELEGRAM_CHAT_ID` now resolves
+  ahead of `users.telegram_chat_id` (`resolveChatId()` in
+  `lib/telegram.js`), so a single-user deployment can wire up alerts
+  entirely from Render/hosting env vars with no per-user field to fill
+  in. The Settings page reflects this: it no longer has a chat-ID input,
+  just a "Telegram alerts: Connected / Not connected" status line and a
+  test-send button, driven by `GET /api/telegram/status`'s `ready` flag.
+  `users.telegram_chat_id` and the `PATCH /api/auth/me` support for it
+  are still there in the schema/API for a future multi-user setup where
+  a shared env-var chat would cross-wire everyone's alerts - there's just
+  no UI wired up to set it right now, since the only account on this
+  instance doesn't need it. If that's ever needed again, it's a Settings
+  form away, not a backend change.
 - **Telegram alerts**, alongside push and email. One bot for the whole
   instance (`TELEGRAM_BOT_TOKEN`, from BotFather), each user pastes their
   own chat ID into Settings - same shape as SMTP-for-sending +

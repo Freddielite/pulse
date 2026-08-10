@@ -1,13 +1,25 @@
 // One bot for the whole app, configured server-wide via TELEGRAM_BOT_TOKEN
 // (same shape as SMTP_* for email: one set of send credentials, a
-// per-user destination on top - here that's users.telegram_chat_id
-// instead of alert_email). A user gets their chat ID by messaging their
-// own instance's bot and reading it back off getUpdates once; see
-// HANDOVER.md / the Settings page copy for the exact steps.
+// destination on top). The destination itself can come from either
+// place:
+//   - TELEGRAM_CHAT_ID env var - a single hardcoded chat, set once in
+//     Render/wherever and shared by the whole deployment. Simplest path
+//     for a single-user instance, and deliberately wins if set, so
+//     switching an instance over to it doesn't require also clearing out
+//     old per-user values in the database.
+//   - users.telegram_chat_id - per-user, for deployments with more than
+//     one account where a single shared chat ID would cross wires
+//     between users' alerts.
 const API_ROOT = "https://api.telegram.org";
 
 export function telegramConfigured() {
   return !!process.env.TELEGRAM_BOT_TOKEN;
+}
+
+// `user` is optional - callers that only have the env var in play (e.g.
+// checking readiness before a user is loaded) can omit it.
+export function resolveChatId(user) {
+  return process.env.TELEGRAM_CHAT_ID || user?.telegram_chat_id || null;
 }
 
 export async function sendTelegramMessage({ chatId, text }) {

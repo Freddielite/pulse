@@ -3,7 +3,7 @@ import { runHttpCheck } from "./httpCheck.js";
 import { getSslExpiry, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
-import { sendTelegramMessage } from "./telegram.js";
+import { sendTelegramMessage, resolveChatId } from "./telegram.js";
 import { scanSite } from "./scanner.js";
 
 // How often the (best-effort, rate-limited) cert/domain check runs per
@@ -239,7 +239,7 @@ async function alertDown(monitor, result, incidentId) {
   const body = result.errorMessage || "Check failed.";
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 async function alertStillDown(monitor, result, incident) {
@@ -252,7 +252,7 @@ async function alertStillDown(monitor, result, incident) {
   const body = `Down for about ${hours} hour${hours === 1 ? "" : "s"} now. Latest: ${result.errorMessage || "Check failed."}`;
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 async function alertRecovered(monitor, incident) {
@@ -265,7 +265,7 @@ async function alertRecovered(monitor, incident) {
   const body = `Was down for about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
-  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `🟢 ${title}\n${body}` });
+  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}\n${body}` });
 }
 
 // Throttled to one nudge per calendar day per monitor+kind, so a 14-day
@@ -288,5 +288,5 @@ async function alertExpiringSoon(monitor, kind, expiresAt) {
   const body = `${monitor.name}'s ${kind.toLowerCase()} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${expiresAt.toDateString()}).`;
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
-  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `⚠️ ${title}\n${body}` });
+  await sendTelegramMessage({ chatId: resolveChatId(user), text: `⚠️ ${title}\n${body}` });
 }
