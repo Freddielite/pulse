@@ -32,18 +32,21 @@ router.post("/check-now", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains } = req.body;
+  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures } = req.body;
   if (!name?.trim() || !url?.trim()) return res.status(400).json({ error: "name and url are required" });
   try {
     new URL(url); // throws on a malformed URL, caught below
   } catch {
     return res.status(400).json({ error: "that doesn't look like a valid URL" });
   }
+  if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
+    return res.status(400).json({ error: "alert after failures must be at least 1" });
+  }
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
-         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [
         req.userId,
         name.trim(),
@@ -56,6 +59,7 @@ router.post("/", async (req, res) => {
         !!keep_alive_target,
         group_name?.trim() || null,
         body_contains?.trim() || null,
+        Number(alert_after_failures) || 1,
       ]
     );
     res.status(201).json(rows[0]);
@@ -66,7 +70,10 @@ router.post("/", async (req, res) => {
 });
 
 router.patch("/:id", async (req, res) => {
-  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, active, group_name, body_contains } = req.body;
+  const { name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, active, group_name, body_contains, alert_after_failures } = req.body;
+  if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
+    return res.status(400).json({ error: "alert after failures must be at least 1" });
+  }
   try {
     const { rows } = await pool.query(
       `UPDATE monitors SET
@@ -81,6 +88,7 @@ router.patch("/:id", async (req, res) => {
          active = COALESCE($11, active),
          group_name = $12,
          body_contains = $13,
+         alert_after_failures = COALESCE($14, alert_after_failures),
          updated_at = now()
        WHERE id = $1 AND user_id = $2 RETURNING *`,
       [
@@ -97,6 +105,7 @@ router.patch("/:id", async (req, res) => {
         active,
         group_name?.trim() || null,
         body_contains?.trim() || null,
+        alert_after_failures ? Number(alert_after_failures) : null,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });

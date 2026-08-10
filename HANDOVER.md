@@ -55,6 +55,7 @@ curls the same URL works identically.
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | For push | Generate with `npm run gen-vapid` in `backend/` |
 | `VAPID_SUBJECT` | For push | `mailto:you@example.com` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | For email | Any SMTP provider. Gmail app password, Resend, Mailgun, etc. |
+| `TELEGRAM_BOT_TOKEN` | For Telegram | One bot for the whole instance, from [@BotFather](https://t.me/BotFather). Each user then adds their own chat ID in Settings. |
 
 ### Frontend (Vercel)
 
@@ -92,6 +93,30 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Telegram alerts**, alongside push and email. One bot for the whole
+  instance (`TELEGRAM_BOT_TOKEN`, from BotFather), each user pastes their
+  own chat ID into Settings - same shape as SMTP-for-sending +
+  `alert_email`-for-routing, just with `telegram_chat_id`. Fires from the
+  same four alert sites as push/email (`alertDown`, `alertStillDown`,
+  `alertRecovered`, `alertExpiringSoon` in `checkRunner.js`), so it's
+  subject to the same throttling (hourly repeat-down, once-per-day expiry
+  nudge) rather than being a separate alerting path. `GET
+  /api/telegram/status` tells the frontend whether a bot is configured at
+  all, so the Settings section only appears when it's actually usable;
+  `POST /api/telegram/test` sends a one-off test message the same way the
+  existing push test does. No new dependency - it's a plain `fetch` to
+  Telegram's Bot API, same as every other outbound HTTP call in this repo.
+- **Consecutive-failure threshold before alerting**, per monitor
+  (`alert_after_failures`, default 1 = old behavior). A failed check below
+  the threshold is still logged in `checks` and bumps a
+  `consecutive_failures` counter on the monitor row, but doesn't flip
+  `current_status` to "down", open an incident, or fire an alert - only
+  the check that actually crosses the threshold does. Any "up" resets the
+  counter to 0. This sits on top of, not instead of, the existing single
+  retry in `httpCheck.js`: the retry absorbs a blip within one check, this
+  absorbs a blip that spans several checks in a row. Editable per-monitor
+  in the monitor form; no UI surfaces the live streak count itself, only
+  the resulting `current_status`.
 - **Security scanner added**, ported from a separate Cloudflare Worker
   project (`wyntek-status`) that briefly existed as a standalone public
   status page for Wyntek clients. That whole project was retired -
@@ -131,13 +156,10 @@ curls the same URL works identically.
 
 Not built, just worth keeping track of:
 
-- **Consecutive-failure threshold before alerting** - right now the
-  existing single retry helps, but a configurable "N checks in a row"
-  option would cut down false-positive alerts further on flaky
-  connections.
-- **Webhook alerts** (Slack/Discord/Telegram) - push and email exist;
-  a webhook option would fit better for a client-facing channel than
-  personal push notifications.
+- **Slack/Discord webhook alerts** - Telegram now covers the "push
+  notification to a channel/group, not just a personal device" need;
+  Slack and Discord incoming-webhooks would fit the same alert sites for
+  teams that live there instead.
 - **Read-only share links per monitor** - a link scoped to one monitor's
   status/uptime/security score that can be handed to a client, no login,
   no visibility into any other monitor. Different from a full public

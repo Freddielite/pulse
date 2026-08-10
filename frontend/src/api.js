@@ -58,3 +58,6 @@ export const getVapidPublicKey = () => apiFetch("/push/vapid-public-key");
 export const subscribePush = (subscription) => apiFetch("/push/subscribe", { method: "POST", body: JSON.stringify(subscription) });
 export const unsubscribePush = (endpoint) => apiFetch("/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint }) });
 export const testPush = () => apiFetch("/push/test", { method: "POST" });
+
+export const getTelegramStatus = () => apiFetch("/telegram/status");
+export const testTelegram = () => apiFetch("/telegram/test", { method: "POST" });

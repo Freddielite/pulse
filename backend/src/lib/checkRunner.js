@@ -3,6 +3,7 @@ import { runHttpCheck } from "./httpCheck.js";
 import { getSslExpiry, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
+import { sendTelegramMessage } from "./telegram.js";
 import { scanSite } from "./scanner.js";
 
 // How often the (best-effort, rate-limited) cert/domain check runs per
@@ -53,54 +54,79 @@ export async function runUptimeChecks(monitorRows) {
 async function checkOneMonitor(monitor) {
   const result = await runHttpCheck(monitor);
 
+  // The raw per-check result is always logged as-is, threshold or no -
+  // the checks table (and the uptime chart/heatmap built on it) should
+  // reflect what actually happened on the wire, not the alerting state.
   await pool.query(
     `INSERT INTO checks (monitor_id, status, status_code, response_ms, error_message)
      VALUES ($1, $2, $3, $4, $5)`,
     [monitor.id, result.status, result.statusCode, result.responseMs, result.errorMessage]
   );
 
-  const wasUp = monitor.current_status !== "down";
-  await pool.query(
-    `UPDATE monitors SET current_status = $2, last_checked_at = now(), last_status_code = $3, last_response_ms = $4, updated_at = now()
-     WHERE id = $1`,
-    [monitor.id, result.status, result.statusCode, result.responseMs]
-  );
-
+  const wasAlertingDown = monitor.current_status === "down";
+  const threshold = monitor.alert_after_failures || 1;
   let alerted = false;
-  if (result.status === "down" && wasUp) {
-    const { rows: incidentRows } = await pool.query(
-      `INSERT INTO incidents (monitor_id, error_message, last_notified_at) VALUES ($1, $2, now()) RETURNING id`,
-      [monitor.id, result.errorMessage]
+
+  if (result.status === "down") {
+    const failureCount = (monitor.consecutive_failures || 0) + 1;
+    const thresholdReached = failureCount >= threshold;
+    // Below threshold: log the failure and bump the streak, but don't
+    // touch current_status yet - a monitor with alert_after_failures > 1
+    // is meant to ride out exactly this kind of blip without flipping to
+    // "down" (and alerting) on every single one.
+    const newStatus = thresholdReached ? "down" : monitor.current_status;
+
+    await pool.query(
+      `UPDATE monitors SET current_status = $2, consecutive_failures = $3, last_checked_at = now(), last_status_code = $4, last_response_ms = $5, updated_at = now()
+       WHERE id = $1`,
+      [monitor.id, newStatus, failureCount, result.statusCode, result.responseMs]
     );
-    await alertDown(monitor, result, incidentRows[0].id);
-    alerted = true;
-  } else if (result.status === "down" && !wasUp) {
-    // Still down, not a fresh transition. Only worth a repeat alert if
-    // it's actually been a while since the last one - most ticks in
-    // between should stay silent.
-    const { rows: openRows } = await pool.query(
-      `SELECT id, started_at, last_notified_at FROM incidents WHERE monitor_id = $1 AND resolved_at IS NULL`,
-      [monitor.id]
-    );
-    const incident = openRows[0];
-    if (incident) {
-      const sinceLastNotify = Date.now() - new Date(incident.last_notified_at || incident.started_at).getTime();
-      if (sinceLastNotify >= REPEAT_ALERT_INTERVAL_MS) {
-        await pool.query(`UPDATE incidents SET last_notified_at = now() WHERE id = $1`, [incident.id]);
-        await alertStillDown(monitor, result, incident);
-        alerted = true;
+
+    if (thresholdReached && !wasAlertingDown) {
+      const { rows: incidentRows } = await pool.query(
+        `INSERT INTO incidents (monitor_id, error_message, last_notified_at) VALUES ($1, $2, now()) RETURNING id`,
+        [monitor.id, result.errorMessage]
+      );
+      await alertDown(monitor, result, incidentRows[0].id);
+      alerted = true;
+    } else if (thresholdReached && wasAlertingDown) {
+      // Still down, not a fresh transition. Only worth a repeat alert if
+      // it's actually been a while since the last one - most ticks in
+      // between should stay silent.
+      const { rows: openRows } = await pool.query(
+        `SELECT id, started_at, last_notified_at FROM incidents WHERE monitor_id = $1 AND resolved_at IS NULL`,
+        [monitor.id]
+      );
+      const incident = openRows[0];
+      if (incident) {
+        const sinceLastNotify = Date.now() - new Date(incident.last_notified_at || incident.started_at).getTime();
+        if (sinceLastNotify >= REPEAT_ALERT_INTERVAL_MS) {
+          await pool.query(`UPDATE incidents SET last_notified_at = now() WHERE id = $1`, [incident.id]);
+          await alertStillDown(monitor, result, incident);
+          alerted = true;
+        }
       }
     }
-  } else if (result.status === "up" && !wasUp) {
-    const { rows: resolvedRows } = await pool.query(
-      `UPDATE incidents SET resolved_at = now()
-       WHERE monitor_id = $1 AND resolved_at IS NULL
-       RETURNING id, started_at`,
-      [monitor.id]
+    // Below threshold: no incident, no alert - just the streak counter
+    // ticking up, already persisted above.
+  } else {
+    await pool.query(
+      `UPDATE monitors SET current_status = 'up', consecutive_failures = 0, last_checked_at = now(), last_status_code = $2, last_response_ms = $3, updated_at = now()
+       WHERE id = $1`,
+      [monitor.id, result.statusCode, result.responseMs]
     );
-    if (resolvedRows[0]) {
-      await alertRecovered(monitor, resolvedRows[0]);
-      alerted = true;
+
+    if (wasAlertingDown) {
+      const { rows: resolvedRows } = await pool.query(
+        `UPDATE incidents SET resolved_at = now()
+         WHERE monitor_id = $1 AND resolved_at IS NULL
+         RETURNING id, started_at`,
+        [monitor.id]
+      );
+      if (resolvedRows[0]) {
+        await alertRecovered(monitor, resolvedRows[0]);
+        alerted = true;
+      }
     }
   }
 
@@ -213,6 +239,7 @@ async function alertDown(monitor, result, incidentId) {
   const body = result.errorMessage || "Check failed.";
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 async function alertStillDown(monitor, result, incident) {
@@ -225,6 +252,7 @@ async function alertStillDown(monitor, result, incident) {
   const body = `Down for about ${hours} hour${hours === 1 ? "" : "s"} now. Latest: ${result.errorMessage || "Check failed."}`;
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 async function alertRecovered(monitor, incident) {
@@ -237,6 +265,7 @@ async function alertRecovered(monitor, incident) {
   const body = `Was down for about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
+  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `🟢 ${title}\n${body}` });
 }
 
 // Throttled to one nudge per calendar day per monitor+kind, so a 14-day
@@ -259,4 +288,5 @@ async function alertExpiringSoon(monitor, kind, expiresAt) {
   const body = `${monitor.name}'s ${kind.toLowerCase()} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${expiresAt.toDateString()}).`;
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
+  await sendTelegramMessage({ chatId: user.telegram_chat_id, text: `⚠️ ${title}\n${body}` });
 }

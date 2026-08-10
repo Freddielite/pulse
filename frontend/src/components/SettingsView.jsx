@@ -1,11 +1,20 @@
-import { useState } from "react";
-import { updateMe, testPush, logout } from "../api.js";
+import { useEffect, useState } from "react";
+import { updateMe, testPush, testTelegram, getTelegramStatus, logout } from "../api.js";
 import { usePush } from "../hooks/usePush.js";
 
 export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }) {
   const push = usePush();
   const [alertEmail, setAlertEmail] = useState(user.alert_email || "");
   const [savingEmail, setSavingEmail] = useState(false);
+  const [telegramChatId, setTelegramChatId] = useState(user.telegram_chat_id || "");
+  const [savingTelegram, setSavingTelegram] = useState(false);
+  const [telegramConfigured, setTelegramConfigured] = useState(false);
+
+  useEffect(() => {
+    getTelegramStatus()
+      .then((s) => setTelegramConfigured(s.configured))
+      .catch(() => setTelegramConfigured(false));
+  }, []);
 
   async function handlePushToggle() {
     try {
@@ -41,6 +50,29 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
       toast(err.message, "error");
     } finally {
       setSavingEmail(false);
+    }
+  }
+
+  async function handleSaveTelegram(e) {
+    e.preventDefault();
+    setSavingTelegram(true);
+    try {
+      const updated = await updateMe({ telegram_chat_id: telegramChatId });
+      onUserUpdated(updated);
+      toast(telegramChatId.trim() ? "Telegram chat ID saved." : "Telegram alerts turned off.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setSavingTelegram(false);
+    }
+  }
+
+  async function handleTestTelegram() {
+    try {
+      await testTelegram();
+      toast("Test message sent.");
+    } catch (err) {
+      toast(err.message, "error");
     }
   }
 
@@ -83,6 +115,39 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
           <button className="pl-btn pl-btn--sm" type="submit" disabled={savingEmail}>{savingEmail ? "Saving..." : "Save"}</button>
         </form>
       </div>
+
+      {telegramConfigured && (
+        <>
+          <div className="pl-section-label">Telegram alerts</div>
+          <div className="pl-panel">
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>
+              Message this Pulse instance's bot (ask whoever runs it for the bot's @username, or check the
+              deploy's <code>TELEGRAM_BOT_TOKEN</code>), send it anything, then open{" "}
+              <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> in a browser to find your chat ID
+              in the response. Paste it below.
+            </div>
+            <form onSubmit={handleSaveTelegram} style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+              <div className="pl-field" style={{ flex: 1, marginBottom: 0 }}>
+                <label>Telegram chat ID</label>
+                <input
+                  value={telegramChatId}
+                  onChange={(e) => setTelegramChatId(e.target.value)}
+                  placeholder="e.g. 123456789"
+                />
+              </div>
+              <button className="pl-btn pl-btn--sm" type="submit" disabled={savingTelegram}>
+                {savingTelegram ? "Saving..." : "Save"}
+              </button>
+            </form>
+            {user.telegram_chat_id && (
+              <div className="pl-settings-row">
+                <div className="pl-settings-row__desc">Send a test message</div>
+                <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleTestTelegram}>Send test</button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <div className="pl-section-label">Account</div>
       <div className="pl-panel">

@@ -53,16 +53,19 @@ router.post("/logout", (req, res) => {
 });
 
 router.get("/me", requireAuth, async (req, res) => {
-  const { rows } = await pool.query(`SELECT id, email, alert_email FROM users WHERE id = $1`, [req.userId]);
+  const { rows } = await pool.query(`SELECT id, email, alert_email, telegram_chat_id FROM users WHERE id = $1`, [req.userId]);
   if (rows.length === 0) return res.status(404).json({ error: "not found" });
   res.json(rows[0]);
 });
 
 router.patch("/me", requireAuth, async (req, res) => {
-  const { alert_email } = req.body;
+  const { alert_email, telegram_chat_id } = req.body;
   const { rows } = await pool.query(
-    `UPDATE users SET alert_email = COALESCE($2, alert_email) WHERE id = $1 RETURNING id, email, alert_email`,
-    [req.userId, alert_email?.trim() || null]
+    `UPDATE users SET
+       alert_email = COALESCE($2, alert_email),
+       telegram_chat_id = $3
+     WHERE id = $1 RETURNING id, email, alert_email, telegram_chat_id`,
+    [req.userId, alert_email?.trim() || null, telegram_chat_id?.trim() || null]
   );
   res.json(rows[0]);
 });

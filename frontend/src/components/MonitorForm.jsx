@@ -13,6 +13,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [keepAlive, setKeepAlive] = useState(monitor?.keep_alive_target || false);
   const [groupName, setGroupName] = useState(monitor?.group_name || "");
   const [bodyContains, setBodyContains] = useState(monitor?.body_contains || "");
+  const [alertAfterFailures, setAlertAfterFailures] = useState(monitor?.alert_after_failures || 1);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -31,6 +32,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       keep_alive_target: keepAlive,
       group_name: groupName.trim() || null,
       body_contains: bodyContains.trim() || null,
+      alert_after_failures: Number(alertAfterFailures) || 1,
     };
     try {
       if (editing) {
@@ -120,6 +122,19 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
             />
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
               Fails the check if a 200 response doesn't actually contain this text.
+            </div>
+          </div>
+          <div className="pl-field">
+            <label>Alert after this many consecutive failures</label>
+            <input
+              type="number"
+              min={1}
+              value={alertAfterFailures}
+              onChange={(e) => setAlertAfterFailures(e.target.value)}
+            />
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+              Default of 1 alerts on the first failed check (after its own automatic retry). Raise this to ride out
+              flaky connections that fail a check or two before recovering on their own.
             </div>
           </div>
           <div className="pl-toggle-row">

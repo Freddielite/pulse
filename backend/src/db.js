@@ -22,8 +22,15 @@ export async function migrate() {
       email         TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       alert_email   TEXT,
+      -- Recipient for Telegram alerts, from the app's single bot
+      -- (TELEGRAM_BOT_TOKEN env var) to this user's chat with it. NULL
+      -- means Telegram alerts are off for this user, same as a blank
+      -- alert_email effectively turns off email alerts.
+      telegram_chat_id TEXT,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;
 
     -- express-session's connect-pg-simple store creates/manages this table
     -- itself on boot (see index.js), so it isn't defined here.
@@ -73,6 +80,20 @@ export async function migrate() {
       -- decides). Exists because a 200 with an empty or broken body is a
       -- real failure mode a status-code-only check can't see.
       body_contains        TEXT,
+      -- How many consecutive failed checks it takes before this monitor
+      -- actually goes "down" (opens an incident, fires an alert). Default
+      -- of 1 preserves the original behavior - alert on the first failure
+      -- (runHttpCheck's own single retry already absorbs the shortest
+      -- blips; this is for flaky connections that need more runway than
+      -- that before it's worth waking someone up).
+      alert_after_failures INTEGER NOT NULL DEFAULT 1,
+      -- Running count of consecutive failed checks, reset to 0 on any
+      -- "up". Compared against alert_after_failures to decide whether a
+      -- given failure actually crosses into "down". Deliberately stored
+      -- rather than derived from the checks table each tick - counting
+      -- backwards through check history on every single check would be
+      -- far more work for the same answer.
+      consecutive_failures  INTEGER NOT NULL DEFAULT 0,
       created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -86,6 +107,8 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS group_name TEXT;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS body_contains TEXT;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS security_scanned_at TIMESTAMPTZ;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS alert_after_failures INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS checks (
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
