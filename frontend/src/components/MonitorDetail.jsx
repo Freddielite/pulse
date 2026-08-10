@@ -43,7 +43,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
 
   const snoozed = !!monitor.snoozed_until && new Date(monitor.snoozed_until).getTime() > Date.now();
 
-  async function load() {
+  async function load(ignore) {
     const [c, i, u, d, s] = await Promise.all([
       getMonitorChecks(monitor.id),
       getMonitorIncidents(monitor.id),
@@ -51,6 +51,12 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
       getMonitorDailyUptime(monitor.id),
       getMonitorSecurity(monitor.id),
     ]);
+    // Guards against a slow response from a monitor you've since navigated
+    // away from landing after the fact and overwriting whatever's actually
+    // on screen now. Without this, switching monitors quickly enough could
+    // let an older monitor's in-flight fetch "leak" its data onto whichever
+    // monitor you're viewing by the time it resolves.
+    if (ignore?.current) return;
     setChecks(c);
     setIncidents(i);
     setUptime(u);
@@ -59,11 +65,15 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   }
 
   useEffect(() => {
-    load();
+    const ignore = { current: false };
+    load(ignore);
     // Light auto-refresh so the detail view reflects new checks without
     // needing a manual reload while you're sitting on the page.
-    const id = window.setInterval(load, 30000);
-    return () => window.clearInterval(id);
+    const id = window.setInterval(() => load(ignore), 30000);
+    return () => {
+      ignore.current = true;
+      window.clearInterval(id);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [monitor.id]);
 
