@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, getMonitorTraffic, deleteMonitor, snoozeMonitor, unsnoozeMonitor } from "../api.js";
+import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor } from "../api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
@@ -37,7 +37,6 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   const [dailyUptime, setDailyUptime] = useState([]);
   const [security, setSecurity] = useState(null);
   const [scanning, setScanning] = useState(false);
-  const [traffic, setTraffic] = useState(null);
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
@@ -45,20 +44,18 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   const snoozed = !!monitor.snoozed_until && new Date(monitor.snoozed_until).getTime() > Date.now();
 
   async function load() {
-    const [c, i, u, d, s, t] = await Promise.all([
+    const [c, i, u, d, s] = await Promise.all([
       getMonitorChecks(monitor.id),
       getMonitorIncidents(monitor.id),
       getMonitorUptime(monitor.id),
       getMonitorDailyUptime(monitor.id),
       getMonitorSecurity(monitor.id),
-      getMonitorTraffic(monitor.id),
     ]);
     setChecks(c);
     setIncidents(i);
     setUptime(u);
     setDailyUptime(d);
     setSecurity(s);
-    setTraffic(t);
   }
 
   useEffect(() => {
@@ -251,60 +248,21 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
               </span>
             </div>
             {security.findings.map((f, i) => (
-              <div key={i} className="pl-incident-row" style={{ borderTop: i === 0 ? "none" : undefined }}>
-                <div>
+              <div key={i} className="pl-finding-row" style={{ borderTop: i === 0 ? "none" : undefined }}>
+                <div className="pl-finding-row__text">
                   <div style={{ color: f.pass ? "var(--ink)" : "var(--alert)" }}>{f.check}</div>
-                  <div className="pl-incident-row__error">{f.detail}</div>
+                  <div className="pl-finding-row__detail">{f.detail}</div>
                 </div>
-                <div style={{ color: f.pass ? "var(--signal)" : "var(--alert)", fontSize: 12, fontWeight: 600 }}>
+                <div
+                  className="pl-finding-row__result"
+                  style={{ color: f.pass ? "var(--signal)" : "var(--alert)" }}
+                >
                   {f.pass ? "Pass" : "Fail"}
                 </div>
               </div>
             ))}
           </>
         )}
-      </div>
-
-      <div className="pl-section-label">Traffic</div>
-      <div className="pl-panel">
-        <div style={{ display: "flex", gap: 24, marginBottom: traffic?.topPaths?.length ? 16 : 0 }}>
-          <div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 20 }}>{traffic?.views24h ?? 0}</div>
-            <div style={{ color: "var(--ink-dim)", fontSize: 11 }}>visits (24h)</div>
-          </div>
-        </div>
-
-        {traffic?.topPaths?.length > 0 && (
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ color: "var(--ink-dim)", fontSize: 11, marginBottom: 6 }}>Top pages (7d)</div>
-            {traffic.topPaths.map((p) => (
-              <div key={p.path} className="pl-expiry-row">
-                <span className="pl-expiry-row__label" style={{ fontFamily: "var(--font-mono)" }}>{p.path}</span>
-                <span>{p.views}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div style={{ color: "var(--ink-dim)", fontSize: 11, marginBottom: 6 }}>Embed on this site to start collecting</div>
-        <code
-          style={{
-            display: "block",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11.5,
-            color: "var(--ink-dim)",
-            background: "rgba(255,255,255,0.03)",
-            border: "1px solid var(--panel-border)",
-            borderRadius: 6,
-            padding: "8px 10px",
-            wordBreak: "break-all",
-          }}
-        >
-          {`<script src="${(import.meta.env.VITE_API_URL || "/api")}/beacon.js" data-site="${monitor.id}"></script>`}
-        </code>
-        <div style={{ color: "var(--ink-faint)", fontSize: 11, marginTop: 6 }}>
-          No cookies, no IP address stored. Just page path, referrer domain, and coarse browser/OS.
-        </div>
       </div>
 
       <div className="pl-section-label">Incident history</div>

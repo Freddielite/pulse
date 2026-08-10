@@ -194,41 +194,6 @@ router.post("/:id/security/run", async (req, res) => {
   res.json(rows[0]);
 });
 
-// Private, same as everything else here: this reads pageviews scoped to the
-// caller's own monitor.user_id. The beacon that WRITES to pageviews (see
-// routes/beacon.js) has to be public since it's called from anonymous
-// visitors' browsers, but nothing about reading the results is public -
-// there's no equivalent of this endpoint reachable without a session.
-router.get("/:id/traffic", async (req, res) => {
-  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
-  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
-
-  const [totalRow, topPaths, browsers] = await Promise.all([
-    pool.query(
-      `SELECT COUNT(*)::int as views FROM pageviews WHERE monitor_id = $1 AND created_at >= now() - interval '24 hours'`,
-      [req.params.id]
-    ),
-    pool.query(
-      `SELECT path, COUNT(*)::int as views FROM pageviews
-       WHERE monitor_id = $1 AND created_at >= now() - interval '7 days'
-       GROUP BY path ORDER BY views DESC LIMIT 5`,
-      [req.params.id]
-    ),
-    pool.query(
-      `SELECT browser, COUNT(*)::int as views FROM pageviews
-       WHERE monitor_id = $1 AND created_at >= now() - interval '7 days'
-       GROUP BY browser ORDER BY views DESC LIMIT 5`,
-      [req.params.id]
-    ),
-  ]);
-
-  res.json({
-    views24h: totalRow.rows[0].views,
-    topPaths: topPaths.rows,
-    browsers: browsers.rows,
-  });
-});
-
 // Uptime percentage over rolling windows, computed from the checks log
 // rather than stored, so it's always consistent with what's actually there.
 router.get("/:id/uptime", async (req, res) => {

@@ -51,7 +51,6 @@ export const getMonitorUptime = (id) => apiFetch(`/monitors/${id}/uptime`);
 export const getMonitorDailyUptime = (id, days = 90) => apiFetch(`/monitors/${id}/daily-uptime?days=${days}`);
 export const getMonitorSecurity = (id) => apiFetch(`/monitors/${id}/security`);
 export const runSecurityScan = (id) => apiFetch(`/monitors/${id}/security/run`, { method: "POST", timeoutMs: 20000 });
-export const getMonitorTraffic = (id) => apiFetch(`/monitors/${id}/traffic`);
 
 export const getVapidPublicKey = () => apiFetch("/push/vapid-public-key");
 export const subscribePush = (subscription) => apiFetch("/push/subscribe", { method: "POST", body: JSON.stringify(subscription) });

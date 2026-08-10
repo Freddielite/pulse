@@ -142,23 +142,5 @@ export async function migrate() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_security_scans_monitor_time ON security_scans(monitor_id, scanned_at DESC);
-
-    -- Pageview beacon events. Written by an anonymous script embedded on
-    -- the monitored site itself (see routes/beacon.js), so this table is
-    -- the one place in the schema that accepts writes from outside a
-    -- logged-in session. No IP address, no cookie, no cross-site
-    -- identifier is stored, matching the privacy stance the beacon had
-    -- when it lived in wyntek-status.
-    CREATE TABLE IF NOT EXISTS pageviews (
-      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      monitor_id  UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
-      path        TEXT NOT NULL,
-      referrer    TEXT,
-      browser     TEXT,
-      os          TEXT,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_pageviews_monitor_time ON pageviews(monitor_id, created_at DESC);
   `);
 }
