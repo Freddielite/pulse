@@ -29,6 +29,16 @@ about often enough that they never get the chance.
   deployed over real HTTPS (browsers block it on plain HTTP).
 - **Incident history and uptime heatmap** - every outage is logged with
   duration, plus a day-by-day heatmap per monitor going back 90 days.
+- **Security scanning** - a passive, non-destructive scan per monitor:
+  HTTPS enforcement, six common security headers, server-version
+  disclosure, and four commonly-exposed sensitive paths (`.env`,
+  `.git/config`, etc.). Runs automatically once a day per monitor, or
+  on demand with "Rescan now." Fully private - there's no public
+  endpoint for it, only the authenticated owner of a monitor can see its
+  results.
+- **Downloadable security reports** - export a monitor's latest scan as a
+  plain-text report (score, findings, advice) for your own records or to
+  hand to a client.
 
 ## Stack
 
@@ -45,7 +55,7 @@ about often enough that they never get the chance.
 backend/          Express API + Postgres
   src/
     routes/        auth, monitors, push, cron
-    lib/           check runner, HTTP checks, SSL/WHOIS, push, email
+    lib/           check runner, HTTP checks, SSL/WHOIS, push, email, security scanner
     db.js           schema + migrations (runs automatically on boot)
   scripts/
     gen-vapid.js    generates VAPID keys for push notifications
