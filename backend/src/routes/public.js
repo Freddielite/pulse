@@ -29,6 +29,21 @@ router.get("/monitors/:token", async (req, res) => {
   res.json(monitor);
 });
 
+// Recent checks for the response-time trend line. Same narrowing as the
+// monitor read above: checked_at/status/response_ms only - never
+// error_message, which can carry upstream URLs or internal detail the
+// owner sees for their own monitor but a link recipient shouldn't.
+router.get("/monitors/:token/checks", async (req, res) => {
+  const monitor = await findByToken(req.params.token);
+  if (!monitor) return res.status(404).json(NOT_FOUND);
+  const limit = Math.min(Number(req.query.limit) || 200, 500);
+  const { rows } = await pool.query(
+    `SELECT checked_at, status, response_ms FROM checks WHERE monitor_id = $1 ORDER BY checked_at DESC LIMIT $2`,
+    [monitor.id, limit]
+  );
+  res.json(rows.reverse());
+});
+
 router.get("/monitors/:token/uptime", async (req, res) => {
   const monitor = await findByToken(req.params.token);
   if (!monitor) return res.status(404).json(NOT_FOUND);

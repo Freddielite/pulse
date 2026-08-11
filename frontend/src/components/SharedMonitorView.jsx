@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { getSharedMonitor, getSharedMonitorUptime, getSharedMonitorDailyUptime, getSharedMonitorSecurity } from "../api.js";
+import { getSharedMonitor, getSharedMonitorChecks, getSharedMonitorUptime, getSharedMonitorDailyUptime, getSharedMonitorSecurity } from "../api.js";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
+import ResponseTimeChart from "./ResponseTimeChart.jsx";
+import { useIsMobile } from "../hooks/useIsMobile.js";
 
 function formatDateTime(iso) {
   if (!iso) return "unknown";
@@ -22,22 +24,26 @@ function BrandMark() {
 // themselves scoped to exactly the one monitor this token points at.
 export default function SharedMonitorView({ token }) {
   const [monitor, setMonitor] = useState(undefined); // undefined = loading, null = invalid/revoked
+  const [checks, setChecks] = useState([]);
   const [uptime, setUptime] = useState(null);
   const [dailyUptime, setDailyUptime] = useState([]);
   const [security, setSecurity] = useState(null);
   const [error, setError] = useState(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     let ignore = false;
     Promise.all([
       getSharedMonitor(token),
+      getSharedMonitorChecks(token),
       getSharedMonitorUptime(token),
       getSharedMonitorDailyUptime(token),
       getSharedMonitorSecurity(token),
     ])
-      .then(([m, u, d, s]) => {
+      .then(([m, c, u, d, s]) => {
         if (ignore) return;
         setMonitor(m);
+        setChecks(c);
         setUptime(u);
         setDailyUptime(d);
         setSecurity(s);
@@ -71,7 +77,7 @@ export default function SharedMonitorView({ token }) {
   const statusLabel = monitor.current_status === "up" ? "Operational" : monitor.current_status === "down" ? "Down" : "Unknown";
 
   return (
-    <div className="pl-shell">
+    <div className="pl-shell" style={isMobile ? { padding: "20px 14px 60px" } : undefined}>
       <div className="pl-header">
         <div className="pl-brand">
           <BrandMark />
@@ -81,7 +87,7 @@ export default function SharedMonitorView({ token }) {
 
       <div className="pl-detail-head">
         <div>
-          <div className="pl-detail-title">{monitor.name}</div>
+          <div className="pl-detail-title" style={isMobile ? { fontSize: 19 } : undefined}>{monitor.name}</div>
           <div className="pl-detail-url">{monitor.url}</div>
         </div>
         <span
@@ -98,16 +104,16 @@ export default function SharedMonitorView({ token }) {
 
       {uptime && (
         <div className="pl-uptime-grid">
-          <div className="pl-panel pl-uptime-cell">
-            <div className="pl-uptime-cell__value">{uptime["24h"].uptime_pct != null ? `${uptime["24h"].uptime_pct}%` : "N/A"}</div>
+          <div className="pl-panel pl-uptime-cell" style={isMobile ? { padding: "10px 6px" } : undefined}>
+            <div className="pl-uptime-cell__value" style={isMobile ? { fontSize: 17 } : undefined}>{uptime["24h"].uptime_pct != null ? `${uptime["24h"].uptime_pct}%` : "N/A"}</div>
             <div className="pl-uptime-cell__label">24 hours</div>
           </div>
-          <div className="pl-panel pl-uptime-cell">
-            <div className="pl-uptime-cell__value">{uptime["7d"].uptime_pct != null ? `${uptime["7d"].uptime_pct}%` : "N/A"}</div>
+          <div className="pl-panel pl-uptime-cell" style={isMobile ? { padding: "10px 6px" } : undefined}>
+            <div className="pl-uptime-cell__value" style={isMobile ? { fontSize: 17 } : undefined}>{uptime["7d"].uptime_pct != null ? `${uptime["7d"].uptime_pct}%` : "N/A"}</div>
             <div className="pl-uptime-cell__label">7 days</div>
           </div>
-          <div className="pl-panel pl-uptime-cell">
-            <div className="pl-uptime-cell__value">{uptime["30d"].uptime_pct != null ? `${uptime["30d"].uptime_pct}%` : "N/A"}</div>
+          <div className="pl-panel pl-uptime-cell" style={isMobile ? { padding: "10px 6px" } : undefined}>
+            <div className="pl-uptime-cell__value" style={isMobile ? { fontSize: 17 } : undefined}>{uptime["30d"].uptime_pct != null ? `${uptime["30d"].uptime_pct}%` : "N/A"}</div>
             <div className="pl-uptime-cell__label">30 days</div>
           </div>
         </div>
@@ -122,10 +128,12 @@ export default function SharedMonitorView({ token }) {
         )}
       </div>
 
+      <ResponseTimeChart checks={checks} />
+
       <div className="pl-section-label">Security scan</div>
       <div className="pl-panel">
         {security ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span className="pl-badge" style={security.score < 70 ? { background: "var(--alert-dim)", color: "var(--alert)" } : undefined}>
               {security.score}/100
             </span>

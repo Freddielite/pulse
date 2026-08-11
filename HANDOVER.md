@@ -107,18 +107,27 @@ curls the same URL works identically.
   entirely). Every query in that router is scoped by the token itself,
   never by monitor id alone, so there's no way to walk from one shared
   monitor to another. Deliberately narrow, matching "status/uptime/
-  security score" and nothing else: the public monitor read is an
-  explicit column list (name, url, status, last-checked, response time),
-  not `SELECT *` - no auth header, no synthetic steps, no owner. The
-  security endpoint returns only `{ score, scanned_at }`, never the
-  findings array (exposed paths, missing headers - useful to the owner,
-  not to whoever holds the link). No incident history or per-check log
-  either; if that's ever wanted, `routes/monitors.js`'s own `:id/checks`
-  and `:id/incidents` are the reference for what a scoped-down public
-  version would look like. The token itself isn't hashed at rest the way
-  `api_tokens.token_hash` is - it's not a credential proving who you are,
-  it's a lookup key that's supposed to grant read access to whoever has
-  the URL, so hashing it would add nothing.
+  security score" plus a response-time trend, nothing more: the public
+  monitor read and the `/checks` read are both explicit column lists
+  (name/url/status/last-checked/response-time; checked_at/status/
+  response_ms), not `SELECT *` - no auth header, no synthetic steps, no
+  owner, no `error_message`. The security endpoint returns only
+  `{ score, scanned_at }`, never the findings array (exposed paths,
+  missing headers - useful to the owner, not to whoever holds the link).
+  Still no incident history; `routes/monitors.js`'s own `:id/incidents`
+  is the reference if that's ever wanted. The token itself isn't hashed
+  at rest the way `api_tokens.token_hash` is - it's not a credential
+  proving who you are, it's a lookup key that's supposed to grant read
+  access to whoever has the URL, so hashing it would add nothing.
+  The response-time chart itself (`components/ResponseTimeChart.jsx`)
+  was pulled out of `MonitorDetail.jsx` into its own component so the
+  share view could reuse it exactly rather than re-implementing the
+  downsampling/tooltip logic a second time - both pass it raw
+  `{ checked_at, status, response_ms }` rows and it handles bucketing
+  and mobile sizing itself via `useIsMobile`. `SharedMonitorView.jsx`
+  applies the same hook for its own layout - tighter shell padding,
+  smaller title/uptime-cell type, and wrapping the security-score row -
+  below the app's existing 560px breakpoint.
 - **Custom dropdown, app-wide.** Every native `<select>` (Check type,
   Method in the monitor form, and the per-step Method in
   `SyntheticStepsEditor.jsx`) is now `components/Dropdown.jsx` - a

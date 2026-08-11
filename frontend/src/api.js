@@ -74,6 +74,7 @@ export const revokeMonitorShare = (id) => apiFetch(`/monitors/${id}/share`, { me
 // wrapper (sending a session cookie here is harmless, just unnecessary),
 // just under the /public prefix the backend leaves outside requireAuth.
 export const getSharedMonitor = (token) => apiFetch(`/public/monitors/${token}`);
+export const getSharedMonitorChecks = (token, limit = 200) => apiFetch(`/public/monitors/${token}/checks?limit=${limit}`);
 export const getSharedMonitorUptime = (token) => apiFetch(`/public/monitors/${token}/uptime`);
 export const getSharedMonitorDailyUptime = (token, days = 90) => apiFetch(`/public/monitors/${token}/daily-uptime?days=${days}`);
 export const getSharedMonitorSecurity = (token) => apiFetch(`/public/monitors/${token}/security`);
