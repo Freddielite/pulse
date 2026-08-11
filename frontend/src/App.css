@@ -32,6 +32,18 @@ body,
   height: 100%;
 }
 
+/* Safety net: a flex row somewhere with unwrapped, unshrinkable content
+   (missing flex-wrap or min-width: 0 on a child) will always eventually
+   sneak back in - see the comments on .pl-detail-head and
+   .pl-incident-row for two we already hit. Rather than let that push
+   the whole page into horizontal scroll again, clip it here so the
+   symptom is "one element looks cramped" instead of "the entire mobile
+   layout shifts and everything reads as cut off." */
+html,
+body {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   background: radial-gradient(ellipse at top, var(--bg-alt), var(--bg) 60%);

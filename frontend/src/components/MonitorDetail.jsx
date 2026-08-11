@@ -314,9 +314,9 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
         </>
       )}
 
-      <div className="pl-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div className="pl-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 8px" }}>
         <span>Security scan</span>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {security && (
             <button
               type="button"
