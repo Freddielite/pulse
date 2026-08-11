@@ -59,13 +59,13 @@ export default function ResponseTimeChart({ checks }) {
   return (
     <>
       <div className="pl-section-label">Response time</div>
-      <div className="pl-panel" style={{ height: isMobile ? 170 : 200, padding: isMobile ? "14px 4px 6px" : "16px 10px 6px" }}>
+      <div className="pl-panel" style={{ height: isMobile ? 180 : 200, padding: isMobile ? "14px 4px 6px 0" : "16px 10px 6px" }}>
         {chartData.length > 1 ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ left: isMobile ? -12 : 0 }}>
+            <LineChart data={chartData} margin={{ top: 4, right: isMobile ? 4 : 8, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
               <XAxis dataKey="time" tick={{ fontSize: 10, fill: "var(--ink-faint)" }} axisLine={false} tickLine={false} minTickGap={isMobile ? 24 : 40} />
-              <YAxis tick={{ fontSize: 10, fill: "var(--ink-faint)" }} axisLine={false} tickLine={false} unit="ms" width={isMobile ? 36 : 44} />
+              <YAxis tick={{ fontSize: 10, fill: "var(--ink-faint)" }} axisLine={false} tickLine={false} unit="ms" width={isMobile ? 40 : 44} />
               <Tooltip content={<ResponseTimeTooltip />} />
               <Line type="monotone" dataKey="ms" stroke="#3ddc84" strokeWidth={1.75} dot={false} connectNulls={false} />
             </LineChart>

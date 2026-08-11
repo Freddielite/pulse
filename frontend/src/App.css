@@ -876,6 +876,18 @@ a {
 }
 
 @media (max-width: 560px) {
+  .pl-shell {
+    padding: 20px 14px 60px;
+  }
+  .pl-detail-title {
+    font-size: 19px;
+  }
+  .pl-uptime-cell {
+    padding: 10px 6px;
+  }
+  .pl-uptime-cell__value {
+    font-size: 17px;
+  }
   .pl-field-row {
     grid-template-columns: 1fr;
   }
