@@ -104,16 +104,21 @@ curls the same URL works identically.
   without touching surrounding form logic. Closes on an outside click or
   Escape.
 - **Fixed: multi-step monitor detail page broke into horizontal scroll
-  on mobile.** `.pl-detail-head`'s left-side child (name + URL) had no
-  `min-width: 0`, so as a flex item it wouldn't shrink below its
-  content's natural width - fine for a short name, but the "multi-step"
-  badge tacked onto the title line pushed that natural width past the
-  viewport on a phone, dragging the *whole page* into horizontal scroll
-  since there's no `overflow-x` guard at the body level. Fixed with
-  `min-width: 0` + `flex-wrap` on the head row and the title itself
-  (mirrors the same pattern `.pl-monitor-card__main` already had, which
-  is why the monitors list never showed this - it was never missing the
-  min-width reset in the first place).
+  on mobile.** Two instances of the same bug, both flex children missing
+  `min-width: 0` so they'd refuse to shrink below their content's
+  natural width regardless of what `overflow`/`text-overflow` said:
+  `.pl-detail-head`'s name+URL side (a "multi-step" badge tacked onto a
+  short name was usually enough to tip a header over the viewport width
+  on a phone), and, the one that actually mattered here,
+  `.pl-incident-row__error` - it had `text-overflow: ellipsis` set, but
+  that was silently doing nothing without `min-width: 0`, so a
+  multi-step error message ("Step 2 (GET .../cookies): response did not
+  contain expected text..."), much longer than a typical single-request
+  error, just overflowed the row instead of truncating. Both fixed;
+  regular http monitors never hit either bug since their error text and
+  header are usually short enough to fit anyway. Mirrors the pattern
+  `.pl-monitor-card__main` already had right, which is why the monitors
+  list was never affected.
 - **API tokens.** Bearer-token auth for scripting against Pulse directly
   (cron jobs, other tools) alongside the existing browser session -
   `requireAuth.js` now accepts either. New `api_tokens` table (hash only,

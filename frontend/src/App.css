@@ -698,6 +698,17 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* text-overflow: ellipsis silently does nothing without this: as a
+     flex item, this defaults to min-width: auto, meaning it refuses to
+     shrink below its own content's natural width no matter what overflow
+     says - so a long line (a multi-step error like 'Step 2 (GET
+     https://.../cookies): response did not contain expected text:
+     "testcookie"' is far longer than a typical single-request error)
+     just pushes the row, and the whole page, into horizontal scroll
+     instead of ever getting truncated. Same root cause as the detail
+     header fix above, different element. */
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .pl-incident-row__duration {
