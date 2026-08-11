@@ -704,23 +704,24 @@ a {
   border-bottom: none;
 }
 
+/* This is the actual flex child of .pl-incident-row (the date line and
+   the error line stack inside it) - min-width: 0 has to live here, not
+   just on .pl-incident-row__error below. A grandchild's min-width: 0
+   can't undo the flex item's own default min-width: auto, so without
+   this wrapper the long error text still forced the row - and the
+   whole page - into horizontal scroll. Same root cause as the detail
+   header fix above, one level deeper. */
+.pl-incident-row__main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .pl-incident-row__error {
   color: var(--ink-dim);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* text-overflow: ellipsis silently does nothing without this: as a
-     flex item, this defaults to min-width: auto, meaning it refuses to
-     shrink below its own content's natural width no matter what overflow
-     says - so a long line (a multi-step error like 'Step 2 (GET
-     https://.../cookies): response did not contain expected text:
-     "testcookie"' is far longer than a typical single-request error)
-     just pushes the row, and the whole page, into horizontal scroll
-     instead of ever getting truncated. Same root cause as the detail
-     header fix above, different element. */
-  min-width: 0;
-  flex: 1 1 auto;
 }
 
 .pl-incident-row__duration {

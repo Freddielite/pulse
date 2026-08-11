@@ -383,7 +383,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
         ) : (
           incidents.map((inc) => (
             <div className="pl-incident-row" key={inc.id}>
-              <div>
+              <div className="pl-incident-row__main">
                 <div>{formatDateTime(inc.started_at)}</div>
                 <div className="pl-incident-row__error">{inc.error_message}</div>
               </div>
