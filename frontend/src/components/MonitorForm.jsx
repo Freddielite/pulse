@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createMonitor, updateMonitor } from "../api.js";
 import SyntheticStepsEditor from "./SyntheticStepsEditor.jsx";
+import Dropdown from "./Dropdown.jsx";
 
 const DEFAULT_STEP = { method: "GET", url: "", expected_status: 200, body: "", body_contains: "", extract: null };
 
@@ -78,10 +79,14 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
           </div>
           <div className="pl-field">
             <label>Check type</label>
-            <select value={monitorType} onChange={(e) => setMonitorType(e.target.value)}>
-              <option value="http">Single request</option>
-              <option value="synthetic">Multi-step (login flow, multi-hop API check)</option>
-            </select>
+            <Dropdown
+              value={monitorType}
+              onChange={setMonitorType}
+              options={[
+                { value: "http", label: "Single request" },
+                { value: "synthetic", label: "Multi-step (login flow, multi-hop API check)" },
+              ]}
+            />
             {monitorType === "synthetic" && (
               <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
                 Runs each step as a plain HTTP request in order, carrying cookies forward - no JS execution, so it
@@ -94,11 +99,15 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
             <div className="pl-field-row">
               <div className="pl-field">
                 <label>Method</label>
-                <select value={method} onChange={(e) => setMethod(e.target.value)}>
-                  <option>GET</option>
-                  <option>HEAD</option>
-                  <option>POST</option>
-                </select>
+                <Dropdown
+                  value={method}
+                  onChange={setMethod}
+                  options={[
+                    { value: "GET", label: "GET" },
+                    { value: "HEAD", label: "HEAD" },
+                    { value: "POST", label: "POST" },
+                  ]}
+                />
               </div>
               <div className="pl-field">
                 <label>Expected status</label>

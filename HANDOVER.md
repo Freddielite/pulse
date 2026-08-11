@@ -94,6 +94,26 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Custom dropdown, app-wide.** Every native `<select>` (Check type,
+  Method in the monitor form, and the per-step Method in
+  `SyntheticStepsEditor.jsx`) is now `components/Dropdown.jsx` - a
+  button + absolutely-positioned option list styled to the app's own
+  dark theme, instead of the OS/browser's native picker rendering with
+  zero relation to Pulse's own look. Same `value`/`onChange`/flat-options
+  shape as a native select, so it drops into an existing `pl-field`
+  without touching surrounding form logic. Closes on an outside click or
+  Escape.
+- **Fixed: multi-step monitor detail page broke into horizontal scroll
+  on mobile.** `.pl-detail-head`'s left-side child (name + URL) had no
+  `min-width: 0`, so as a flex item it wouldn't shrink below its
+  content's natural width - fine for a short name, but the "multi-step"
+  badge tacked onto the title line pushed that natural width past the
+  viewport on a phone, dragging the *whole page* into horizontal scroll
+  since there's no `overflow-x` guard at the body level. Fixed with
+  `min-width: 0` + `flex-wrap` on the head row and the title itself
+  (mirrors the same pattern `.pl-monitor-card__main` already had, which
+  is why the monitors list never showed this - it was never missing the
+  min-width reset in the first place).
 - **API tokens.** Bearer-token auth for scripting against Pulse directly
   (cron jobs, other tools) alongside the existing browser session -
   `requireAuth.js` now accepts either. New `api_tokens` table (hash only,

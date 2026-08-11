@@ -345,6 +345,85 @@ a {
   gap: 12px;
 }
 
+/* ---------- Custom dropdown (replaces native <select>) ---------- */
+
+.pl-dropdown {
+  position: relative;
+  width: 100%;
+}
+
+.pl-dropdown__trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+  text-align: left;
+}
+
+.pl-dropdown__trigger:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.pl-dropdown__trigger[aria-expanded="true"] {
+  border-color: var(--signal);
+}
+
+.pl-dropdown__chevron {
+  color: var(--ink-faint);
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.pl-dropdown__trigger[aria-expanded="true"] .pl-dropdown__chevron {
+  transform: rotate(180deg);
+  color: var(--signal);
+}
+
+.pl-dropdown__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--bg-alt);
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  padding: 4px;
+  margin: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.6);
+  list-style: none;
+}
+
+.pl-dropdown__option {
+  padding: 9px 10px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.pl-dropdown__option:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+}
+
+.pl-dropdown__option.is-selected {
+  color: var(--signal);
+  background: var(--signal-dim);
+}
+
 .pl-checkbox-row {
   display: flex;
   align-items: center;
@@ -532,12 +611,29 @@ a {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+/* The name/URL side needs min-width: 0 to actually be allowed to shrink
+   below its content's natural width - without it, a flex item defaults
+   to min-width: auto, so a long name (or, on a multi-step monitor, the
+   name plus the "multi-step" badge on the same line) just pushes the
+   whole row - and with it the whole page - into horizontal scroll on a
+   narrow screen instead of wrapping. */
+.pl-detail-head > div:first-child {
+  min-width: 0;
+  flex: 1 1 240px;
 }
 
 .pl-detail-title {
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: break-word;
 }
 
 .pl-detail-url {

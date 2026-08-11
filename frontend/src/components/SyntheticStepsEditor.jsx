@@ -6,6 +6,8 @@
 // beyond the monitor's single auth header (applied to every step) or a
 // captured {{var}} isn't served by this editor; it's a scope line drawn
 // to keep the form usable rather than a mini HTTP client.
+import Dropdown from "./Dropdown.jsx";
+
 export default function SyntheticStepsEditor({ steps, onChange }) {
   function updateStep(i, patch) {
     onChange(steps.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
@@ -39,13 +41,11 @@ export default function SyntheticStepsEditor({ steps, onChange }) {
           <div className="pl-field-row">
             <div className="pl-field" style={{ marginBottom: 8 }}>
               <label>Method</label>
-              <select value={step.method || "GET"} onChange={(e) => updateStep(i, { method: e.target.value })}>
-                <option>GET</option>
-                <option>POST</option>
-                <option>PUT</option>
-                <option>PATCH</option>
-                <option>DELETE</option>
-              </select>
+              <Dropdown
+                value={step.method || "GET"}
+                onChange={(v) => updateStep(i, { method: v })}
+                options={["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => ({ value: m, label: m }))}
+              />
             </div>
             <div className="pl-field" style={{ marginBottom: 8 }}>
               <label>Expected status</label>
