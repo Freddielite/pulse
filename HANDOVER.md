@@ -232,6 +232,21 @@ curls the same URL works identically.
   absorbs a blip that spans several checks in a row. Editable per-monitor
   in the monitor form; no UI surfaces the live streak count itself, only
   the resulting `current_status`.
+- **Headless-browser (`browser`) check type was built, then removed.**
+  A working version existed briefly - real Chromium via `playwright-core`,
+  serialized to one instance at a time process-wide, `BrowserStepsEditor.jsx`
+  for click/fill/assert-style steps, a `Dockerfile` for the Playwright
+  base image. Deliberately pulled back out rather than kept alongside
+  `synthetic`: for this instance's actual monitors, the lightweight
+  HTTP-sequence `synthetic` type already covers what's needed, and a
+  150-300MB+ Chromium instance is a real risk to a 512MB free-tier
+  budget for a capability not currently in use. If a monitor ever needs
+  to verify something that only exists after client-side JS runs - the
+  one gap `synthetic` genuinely can't close - this is the upgrade path
+  to revisit, not a dead end: `checkOneMonitor`'s dispatch and every
+  downstream consumer (checks table, uptime, alerting) already don't
+  care which check type produced a result, so re-adding a third type
+  is additive, not a rearchitecture.
 - **Security scanner added**, ported from a separate Cloudflare Worker
   project (`wyntek-status`) that briefly existed as a standalone public
   status page for Wyntek clients. That whole project was retired -
@@ -282,9 +297,5 @@ Not built, just worth keeping track of:
 - **Scheduled maintenance windows** - pre-announce a window in advance
   instead of manually snoozing each time; useful once client deploys
   happen on a regular cadence.
-- **A real (headless-browser) synthetic check option** - the
-  multi-step check shipped is HTTP-only (see "Recent changes" above);
-  a Playwright-backed variant that actually executes JS would close the
-  "loads but is broken client-side" gap, at real added operational cost.
 - **CSV export of check/uptime history** - for when a client asks for
   proof of downtime over a specific window.

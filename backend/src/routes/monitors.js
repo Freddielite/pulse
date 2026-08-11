@@ -7,10 +7,17 @@ import { scanSite } from "../lib/scanner.js";
 const router = Router();
 router.use(requireAuth);
 
+// monitor_type as sent by the client, coerced to one of the two real
+// values. Anything unrecognized falls back to 'http' - the safe default,
+// since an http monitor's steps are simply ignored rather than acted on.
+function normalizeMonitorType(type) {
+  return type === "synthetic" ? "synthetic" : "http";
+}
+
 // Shared by both create and update. Only enforced when the monitor is (or
 // is being changed to) 'synthetic' - an 'http' monitor's steps are simply
 // ignored, so there's nothing to validate for it.
-function validateSyntheticSteps(type, steps) {
+function validateSteps(type, steps) {
   if (type !== "synthetic") return null;
   if (!Array.isArray(steps) || steps.length === 0) {
     return "a synthetic check needs at least one step";
@@ -65,8 +72,8 @@ router.post("/", async (req, res) => {
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
   }
-  const type = monitor_type === "synthetic" ? "synthetic" : "http";
-  const stepsError = validateSyntheticSteps(type, synthetic_steps);
+  const type = normalizeMonitorType(monitor_type);
+  const stepsError = validateSteps(type, synthetic_steps);
   if (stepsError) return res.status(400).json({ error: stepsError });
   try {
     const { rows } = await pool.query(
@@ -107,13 +114,13 @@ router.patch("/:id", async (req, res) => {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
   }
   if (monitor_type !== undefined) {
-    const stepsError = validateSyntheticSteps(monitor_type === "synthetic" ? "synthetic" : "http", synthetic_steps);
+    const stepsError = validateSteps(normalizeMonitorType(monitor_type), synthetic_steps);
     if (stepsError) return res.status(400).json({ error: stepsError });
   }
   try {
     const willTouchSteps = monitor_type !== undefined;
-    const nextType = monitor_type === undefined ? null : (monitor_type === "synthetic" ? "synthetic" : "http");
-    const nextSteps = monitor_type === "synthetic" ? JSON.stringify(synthetic_steps) : null;
+    const nextType = monitor_type === undefined ? null : normalizeMonitorType(monitor_type);
+    const nextSteps = nextType === "synthetic" ? JSON.stringify(synthetic_steps) : null;
     const { rows } = await pool.query(
       `UPDATE monitors SET
          name = COALESCE($3, name),

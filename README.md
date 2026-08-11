@@ -39,6 +39,20 @@ about often enough that they never get the chance.
 - **Downloadable security reports** - export a monitor's latest scan as a
   plain-text report (score, findings, advice) for your own records or to
   hand to a client.
+- **Multi-step checks, two ways** - a plain-HTTP request sequence
+  (login, follow the session, hit a gated page) with no JS execution, or
+  a real headless-browser check (`playwright-core`) that actually clicks,
+  fills forms, and asserts on the rendered page. The browser option needs
+  extra setup - see `HANDOVER.md` "Headless-browser checks" before using
+  it.
+- **Telegram alerts**, alongside push and email - one bot for the whole
+  instance, resolves a shared `TELEGRAM_CHAT_ID` env var first so a
+  single-user deployment needs zero per-account setup.
+- **Content-diff monitoring** - hashes the response body and flags an
+  unexpected change, catching a live defacement/compromise that a plain
+  status-code check can't see.
+- **API tokens** - script against Pulse directly instead of only through
+  the browser session.
 
 ## Stack
 
@@ -54,14 +68,17 @@ about often enough that they never get the chance.
 ```
 backend/          Express API + Postgres
   src/
-    routes/        auth, monitors, push, cron
-    lib/           check runner, HTTP checks, SSL/WHOIS, push, email, security scanner
+    routes/        auth, monitors, push, cron, telegram, tokens
+    lib/           check runner, HTTP/synthetic/browser checks, SSL/WHOIS,
+                    push, email, telegram, security scanner, API tokens
     db.js           schema + migrations (runs automatically on boot)
   scripts/
     gen-vapid.js    generates VAPID keys for push notifications
+  Dockerfile        optional, only needed for the browser check type
 frontend/         React + Vite dashboard
   src/
-    components/     Dashboard, MonitorDetail, MonitorForm, Settings, etc.
+    components/     Dashboard, MonitorDetail, MonitorForm, Settings,
+                    SyntheticStepsEditor, BrowserStepsEditor, etc.
     api.js          all backend calls
 HANDOVER.md       deployment steps, env vars, known limitations
 ```
