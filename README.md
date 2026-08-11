@@ -39,12 +39,13 @@ about often enough that they never get the chance.
 - **Downloadable security reports** - export a monitor's latest scan as a
   plain-text report (score, findings, advice) for your own records or to
   hand to a client.
-- **Multi-step checks, two ways** - a plain-HTTP request sequence
-  (login, follow the session, hit a gated page) with no JS execution, or
-  a real headless-browser check (`playwright-core`) that actually clicks,
-  fills forms, and asserts on the rendered page. The browser option needs
-  extra setup - see `HANDOVER.md` "Headless-browser checks" before using
-  it.
+- **Multi-step (synthetic) checks** - a plain-HTTP request sequence
+  (login, follow the session, hit a gated page, assert on the result)
+  with cookies and extracted variables carried from one step to the
+  next. No JS execution or client-side rendering.
+- **Read-only share links** - a link scoped to one monitor's status,
+  uptime, and security score that you can hand to a client, no login,
+  no visibility into any other monitor.
 - **Telegram alerts**, alongside push and email - one bot for the whole
   instance, resolves a shared `TELEGRAM_CHAT_ID` env var first so a
   single-user deployment needs zero per-account setup.
@@ -68,17 +69,16 @@ about often enough that they never get the chance.
 ```
 backend/          Express API + Postgres
   src/
-    routes/        auth, monitors, push, cron, telegram, tokens
-    lib/           check runner, HTTP/synthetic/browser checks, SSL/WHOIS,
+    routes/        auth, monitors, push, cron, telegram, tokens, public
+    lib/           check runner, HTTP/synthetic checks, SSL/WHOIS,
                     push, email, telegram, security scanner, API tokens
     db.js           schema + migrations (runs automatically on boot)
   scripts/
     gen-vapid.js    generates VAPID keys for push notifications
-  Dockerfile        optional, only needed for the browser check type
 frontend/         React + Vite dashboard
   src/
     components/     Dashboard, MonitorDetail, MonitorForm, Settings,
-                    SyntheticStepsEditor, BrowserStepsEditor, etc.
+                    SyntheticStepsEditor, SharedMonitorView, etc.
     api.js          all backend calls
 HANDOVER.md       deployment steps, env vars, known limitations
 ```

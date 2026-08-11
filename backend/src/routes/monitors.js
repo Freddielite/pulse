@@ -3,6 +3,7 @@ import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { runUptimeChecks } from "../lib/checkRunner.js";
 import { scanSite } from "../lib/scanner.js";
+import { generateShareToken } from "../lib/shareLinks.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -301,6 +302,52 @@ router.get("/:id/uptime", async (req, res) => {
     "7d": byWindow[7] || { uptime_pct: null, total_checks: 0 },
     "30d": byWindow[30] || { uptime_pct: null, total_checks: 0 },
   });
+});
+
+// Turns sharing on. Idempotent by design - re-opening the Share panel
+// and hitting this again returns the same link rather than silently
+// rotating it out from under whoever already has it. Regenerate is the
+// explicit, separate action for actually invalidating an old link.
+router.post("/:id/share", async (req, res) => {
+  const owns = await pool.query(`SELECT share_token FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  if (owns.rows[0].share_token) return res.json({ share_token: owns.rows[0].share_token });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE monitors SET share_token = $3, updated_at = now() WHERE id = $1 AND user_id = $2 RETURNING share_token`,
+      [req.params.id, req.userId, generateShareToken()]
+    );
+    res.json({ share_token: rows[0].share_token });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "failed to create share link" });
+  }
+});
+
+// Issues a new token and drops the old one in the same write, so the
+// previous link stops resolving the instant the new one exists - no
+// window where both are live.
+router.post("/:id/share/regenerate", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE monitors SET share_token = $3, updated_at = now() WHERE id = $1 AND user_id = $2 RETURNING share_token`,
+      [req.params.id, req.userId, generateShareToken()]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+    res.json({ share_token: rows[0].share_token });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "failed to regenerate share link" });
+  }
+});
+
+router.delete("/:id/share", async (req, res) => {
+  const { rows } = await pool.query(
+    `UPDATE monitors SET share_token = NULL, updated_at = now() WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [req.params.id, req.userId]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  res.json({ ok: true });
 });
 
 // Day-by-day uptime for the heatmap. Returns one row per day that has at

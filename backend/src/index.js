@@ -10,6 +10,7 @@ import pushRouter from "./routes/push.js";
 import cronRouter from "./routes/cron.js";
 import telegramRouter from "./routes/telegram.js";
 import tokensRouter from "./routes/tokens.js";
+import publicRouter from "./routes/public.js";
 
 const app = express();
 
@@ -49,6 +50,7 @@ app.use("/api/push", pushRouter);
 app.use("/api/cron", cronRouter);
 app.use("/api/telegram", telegramRouter);
 app.use("/api/tokens", tokensRouter);
+app.use("/api/public", publicRouter);
 
 const PORT = process.env.PORT || 4000;
 

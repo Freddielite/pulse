@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor } from "../api.js";
+import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare } from "../api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
@@ -82,7 +82,12 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
   const isMobile = useIsMobile();
+
+  // #/share/<token> - resolves through main.jsx's hash router, which
+  // renders SharedMonitorView with no session at all.
+  const shareUrl = monitor.share_token ? `${window.location.origin}${window.location.pathname}#/share/${monitor.share_token}` : null;
 
   const snoozed = !!monitor.snoozed_until && new Date(monitor.snoozed_until).getTime() > Date.now();
 
@@ -163,6 +168,53 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
       toast(err.message, "error");
     } finally {
       setScanning(false);
+    }
+  }
+
+  async function handleEnableShare() {
+    setShareBusy(true);
+    try {
+      await enableMonitorShare(monitor.id);
+      onChanged();
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function handleRegenerateShare() {
+    setShareBusy(true);
+    try {
+      await regenerateMonitorShare(monitor.id);
+      toast("New link generated - the old one no longer works.");
+      onChanged();
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function handleRevokeShare() {
+    setShareBusy(true);
+    try {
+      await revokeMonitorShare(monitor.id);
+      toast("Share link revoked.");
+      onChanged();
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function handleCopyShareLink() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      toast("Copied to clipboard.");
+    } catch {
+      toast("Couldn't copy automatically - select and copy it manually.", "error");
     }
   }
 
@@ -373,6 +425,29 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
               </div>
             ))}
           </>
+        )}
+      </div>
+
+      <div className="pl-section-label">Share link</div>
+      <div className="pl-panel">
+        <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>
+          A read-only link scoped to this monitor's status, uptime, and security score - no login, no visibility into any other monitor.
+        </div>
+        {monitor.share_token ? (
+          <>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+              <code style={{ fontSize: 12.5, wordBreak: "break-all", flex: 1 }}>{shareUrl}</code>
+              <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleCopyShareLink}>Copy</button>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleRegenerateShare} disabled={shareBusy}>Regenerate</button>
+              <button type="button" className="pl-btn pl-btn--danger pl-btn--sm" onClick={handleRevokeShare} disabled={shareBusy}>Revoke</button>
+            </div>
+          </>
+        ) : (
+          <button type="button" className="pl-btn pl-btn--sm" onClick={handleEnableShare} disabled={shareBusy}>
+            {shareBusy ? "Creating…" : "Create share link"}
+          </button>
         )}
       </div>
 

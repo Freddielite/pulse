@@ -65,3 +65,15 @@ export const testTelegram = () => apiFetch("/telegram/test", { method: "POST" })
 export const listApiTokens = () => apiFetch("/tokens");
 export const createApiToken = (name) => apiFetch("/tokens", { method: "POST", body: JSON.stringify({ name }) });
 export const deleteApiToken = (id) => apiFetch(`/tokens/${id}`, { method: "DELETE" });
+
+export const enableMonitorShare = (id) => apiFetch(`/monitors/${id}/share`, { method: "POST" });
+export const regenerateMonitorShare = (id) => apiFetch(`/monitors/${id}/share/regenerate`, { method: "POST" });
+export const revokeMonitorShare = (id) => apiFetch(`/monitors/${id}/share`, { method: "DELETE" });
+
+// Unauthenticated reads behind a monitor's share link - same apiFetch
+// wrapper (sending a session cookie here is harmless, just unnecessary),
+// just under the /public prefix the backend leaves outside requireAuth.
+export const getSharedMonitor = (token) => apiFetch(`/public/monitors/${token}`);
+export const getSharedMonitorUptime = (token) => apiFetch(`/public/monitors/${token}/uptime`);
+export const getSharedMonitorDailyUptime = (token, days = 90) => apiFetch(`/public/monitors/${token}/daily-uptime?days=${days}`);
+export const getSharedMonitorSecurity = (token) => apiFetch(`/public/monitors/${token}/security`);

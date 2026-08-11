@@ -94,6 +94,31 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Read-only share links, per monitor.** `monitors.share_token`
+  (nullable, unique) - NULL means sharing's off. "Create share link" in
+  a monitor's detail view sets it and shows
+  `<frontend-url>/#/share/<token>`; "Regenerate" swaps it for a new one
+  in the same write, so the old link stops resolving the instant the new
+  one exists; "Revoke" clears it back to NULL. The hash route is checked
+  in `main.jsx` before `App` ever mounts, so opening one never touches
+  `getMe()` or the session - it's rendered by the new
+  `SharedMonitorView.jsx` instead, which only talks to a new
+  `routes/public.js` (mounted at `/api/public`, outside `requireAuth`
+  entirely). Every query in that router is scoped by the token itself,
+  never by monitor id alone, so there's no way to walk from one shared
+  monitor to another. Deliberately narrow, matching "status/uptime/
+  security score" and nothing else: the public monitor read is an
+  explicit column list (name, url, status, last-checked, response time),
+  not `SELECT *` - no auth header, no synthetic steps, no owner. The
+  security endpoint returns only `{ score, scanned_at }`, never the
+  findings array (exposed paths, missing headers - useful to the owner,
+  not to whoever holds the link). No incident history or per-check log
+  either; if that's ever wanted, `routes/monitors.js`'s own `:id/checks`
+  and `:id/incidents` are the reference for what a scoped-down public
+  version would look like. The token itself isn't hashed at rest the way
+  `api_tokens.token_hash` is - it's not a credential proving who you are,
+  it's a lookup key that's supposed to grant read access to whoever has
+  the URL, so hashing it would add nothing.
 - **Custom dropdown, app-wide.** Every native `<select>` (Check type,
   Method in the monitor form, and the per-step Method in
   `SyntheticStepsEditor.jsx`) is now `components/Dropdown.jsx` - a
@@ -143,17 +168,15 @@ curls the same URL works identically.
   **Scope note, called out explicitly because it's a real trade-off, not
   a hidden shortcut:** this is a sequence of plain HTTP requests
   (`lib/syntheticCheck.js`) carrying cookies and `{{name}}`-substituted
-  extracted variables from one step to the next - not a headless browser.
-  No JS execution, no client-side rendering. It covers "log in, follow
-  the session, hit a gated page, assert on the result" (most of what
-  "returns 200 but is actually broken" means for a typical backend) at a
-  fraction of the operational weight of running a browser engine on a
-  free-tier instance - but it won't catch a page that loads fine over the
-  wire and then breaks in the browser. If that gap ends up mattering,
-  swapping in Playwright behind the same `{ status, statusCode,
-  responseMs, errorMessage }` result shape `checkOneMonitor` already
-  expects from either check type is the upgrade path - `checkRunner.js`
-  doesn't care which one produced the result. `MonitorForm.jsx` gained a
+  extracted variables from one step to the next. No JS execution, no
+  client-side rendering. It covers "log in, follow the session, hit a
+  gated page, assert on the result" (most of what "returns 200 but is
+  actually broken" means for a typical backend) - but it won't catch a
+  page that loads fine over the wire and then breaks once client-side JS
+  runs. `checkOneMonitor`'s result shape (`{ status, statusCode,
+  responseMs, errorMessage }`) doesn't care which check type produced
+  it, so that gap stays an option to revisit later rather than something
+  baked into the architecture. `MonitorForm.jsx` gained a
   check-type selector and a `SyntheticStepsEditor.jsx` for building the
   step list (method, URL, body, expected status, body-contains, and the
   optional extract); no per-step custom headers in that UI - the
@@ -232,21 +255,6 @@ curls the same URL works identically.
   absorbs a blip that spans several checks in a row. Editable per-monitor
   in the monitor form; no UI surfaces the live streak count itself, only
   the resulting `current_status`.
-- **Headless-browser (`browser`) check type was built, then removed.**
-  A working version existed briefly - real Chromium via `playwright-core`,
-  serialized to one instance at a time process-wide, `BrowserStepsEditor.jsx`
-  for click/fill/assert-style steps, a `Dockerfile` for the Playwright
-  base image. Deliberately pulled back out rather than kept alongside
-  `synthetic`: for this instance's actual monitors, the lightweight
-  HTTP-sequence `synthetic` type already covers what's needed, and a
-  150-300MB+ Chromium instance is a real risk to a 512MB free-tier
-  budget for a capability not currently in use. If a monitor ever needs
-  to verify something that only exists after client-side JS runs - the
-  one gap `synthetic` genuinely can't close - this is the upgrade path
-  to revisit, not a dead end: `checkOneMonitor`'s dispatch and every
-  downstream consumer (checks table, uptime, alerting) already don't
-  care which check type produced a result, so re-adding a third type
-  is additive, not a rearchitecture.
 - **Security scanner added**, ported from a separate Cloudflare Worker
   project (`wyntek-status`) that briefly existed as a standalone public
   status page for Wyntek clients. That whole project was retired -
@@ -286,14 +294,6 @@ curls the same URL works identically.
 
 Not built, just worth keeping track of:
 
-- **Slack/Discord webhook alerts** - Telegram now covers the "push
-  notification to a channel/group, not just a personal device" need;
-  Slack and Discord incoming-webhooks would fit the same alert sites for
-  teams that live there instead.
-- **Read-only share links per monitor** - a link scoped to one monitor's
-  status/uptime/security score that can be handed to a client, no login,
-  no visibility into any other monitor. Different from a full public
-  status page - narrower, single-monitor scope.
 - **Scheduled maintenance windows** - pre-announce a window in advance
   instead of manually snoozing each time; useful once client deploys
   happen on a regular cadence.

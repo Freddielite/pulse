@@ -134,6 +134,14 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_diff_enabled BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_hash TEXT;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_changed_at TIMESTAMPTZ;
+    -- Read-only share links, one per monitor. NULL means sharing is off.
+    -- A non-NULL value is an unguessable lookup key (18 random bytes),
+    -- not a hashed secret like api_tokens.token_hash - anyone holding the
+    -- URL is *meant* to be able to view the scoped read-only data behind
+    -- it, so there's nothing gained by hashing it at rest. UNIQUE allows
+    -- any number of monitors to share the NULL "not shared" state while
+    -- still guaranteeing two live links never collide.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS share_token TEXT UNIQUE;
 
     CREATE TABLE IF NOT EXISTS checks (
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
