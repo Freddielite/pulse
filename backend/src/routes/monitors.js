@@ -63,6 +63,7 @@ router.post("/", async (req, res) => {
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
     group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
+    degraded_threshold_ms, alert_after_slow,
   } = req.body;
   if (!name?.trim() || !url?.trim()) return res.status(400).json({ error: "name and url are required" });
   try {
@@ -76,14 +77,20 @@ router.post("/", async (req, res) => {
   if (check_timeout_sec !== undefined && check_timeout_sec !== null && (Number(check_timeout_sec) < 3 || Number(check_timeout_sec) > 60)) {
     return res.status(400).json({ error: "check timeout must be between 3 and 60 seconds" });
   }
+  if (degraded_threshold_ms !== undefined && degraded_threshold_ms !== null && Number(degraded_threshold_ms) < 100) {
+    return res.status(400).json({ error: "degraded threshold must be at least 100ms" });
+  }
+  if (alert_after_slow !== undefined && alert_after_slow !== null && Number(alert_after_slow) < 1) {
+    return res.status(400).json({ error: "alert after slow checks must be at least 1" });
+  }
   const type = normalizeMonitorType(monitor_type);
   const stepsError = validateSteps(type, synthetic_steps);
   if (stepsError) return res.status(400).json({ error: stepsError });
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
-         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec, degraded_threshold_ms, alert_after_slow)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
       [
         req.userId,
         name.trim(),
@@ -101,6 +108,8 @@ router.post("/", async (req, res) => {
         type,
         type === "synthetic" ? JSON.stringify(synthetic_steps) : null,
         Number(check_timeout_sec) || 15,
+        degraded_threshold_ms ? Number(degraded_threshold_ms) : null,
+        Number(alert_after_slow) || 3,
       ]
     );
     res.status(201).json(rows[0]);
@@ -114,12 +123,19 @@ router.patch("/:id", async (req, res) => {
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
     active, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
+    degraded_threshold_ms, alert_after_slow,
   } = req.body;
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
   }
   if (check_timeout_sec !== undefined && check_timeout_sec !== null && (Number(check_timeout_sec) < 3 || Number(check_timeout_sec) > 60)) {
     return res.status(400).json({ error: "check timeout must be between 3 and 60 seconds" });
+  }
+  if (degraded_threshold_ms !== undefined && degraded_threshold_ms !== null && Number(degraded_threshold_ms) < 100) {
+    return res.status(400).json({ error: "degraded threshold must be at least 100ms" });
+  }
+  if (alert_after_slow !== undefined && alert_after_slow !== null && Number(alert_after_slow) < 1) {
+    return res.status(400).json({ error: "alert after slow checks must be at least 1" });
   }
   if (monitor_type !== undefined) {
     const stepsError = validateSteps(normalizeMonitorType(monitor_type), synthetic_steps);
@@ -147,6 +163,8 @@ router.patch("/:id", async (req, res) => {
          monitor_type = COALESCE($16, monitor_type),
          synthetic_steps = CASE WHEN $17 THEN $18::jsonb ELSE synthetic_steps END,
          check_timeout_sec = COALESCE($19, check_timeout_sec),
+         degraded_threshold_ms = $20,
+         alert_after_slow = COALESCE($21, alert_after_slow),
          updated_at = now()
        WHERE id = $1 AND user_id = $2 RETURNING *`,
       [
@@ -169,6 +187,8 @@ router.patch("/:id", async (req, res) => {
         willTouchSteps,
         nextSteps,
         check_timeout_sec ? Number(check_timeout_sec) : null,
+        degraded_threshold_ms ? Number(degraded_threshold_ms) : null,
+        alert_after_slow ? Number(alert_after_slow) : null,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });

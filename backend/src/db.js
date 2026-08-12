@@ -51,7 +51,7 @@ export async function migrate() {
       -- uptime check on something already always-on). Cosmetic/informational
       -- only right now, but keeps the two use cases distinguishable in the UI.
       keep_alive_target    BOOLEAN NOT NULL DEFAULT false,
-      current_status       TEXT NOT NULL DEFAULT 'unknown', -- unknown | up | down
+      current_status       TEXT NOT NULL DEFAULT 'unknown', -- unknown | up | degraded | down
       last_checked_at      TIMESTAMPTZ,
       last_status_code     INTEGER,
       last_response_ms     INTEGER,
@@ -152,6 +152,20 @@ export async function migrate() {
     -- being slow. Bounded 3-60s at the API layer, not just in the form -
     -- see the checks in routes/monitors.js.
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS check_timeout_sec INTEGER NOT NULL DEFAULT 15;
+    -- Degraded state: a monitor can be "up but slow" without going down.
+    -- degraded_threshold_ms is NULL by default (feature off) - a passing
+    -- check slower than this counts toward the slow streak below. Same
+    -- 1500ms line lib/latency.js already colors amber, reused as the
+    -- suggested default rather than inventing a second cutoff, but it's
+    -- editable per monitor since "slow" means something different for a
+    -- cold-start API than a static health check.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS degraded_threshold_ms INTEGER;
+    -- Consecutive slow (but passing) checks before current_status actually
+    -- flips to 'degraded' and fires one alert - identical shape to
+    -- alert_after_failures/consecutive_failures, just for the slow case
+    -- instead of the down case, so a single slow blip doesn't page anyone.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS alert_after_slow INTEGER NOT NULL DEFAULT 3;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS consecutive_slow INTEGER NOT NULL DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS checks (
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),

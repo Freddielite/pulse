@@ -52,6 +52,8 @@ export default function MonitorCard({ monitor, onClick }) {
     ? "" // neutral, no color modifier
     : monitor.current_status === "up"
     ? "pl-status-dot--up"
+    : monitor.current_status === "degraded"
+    ? "pl-status-dot--degraded"
     : monitor.current_status === "down"
     ? "pl-status-dot--down"
     : "";
@@ -65,6 +67,7 @@ export default function MonitorCard({ monitor, onClick }) {
           {monitor.monitor_type === "synthetic" && <span className="pl-badge pl-badge--muted" style={{ marginLeft: 8 }}>multi-step</span>}
           {snoozed && <span className="pl-badge pl-badge--muted" style={{ marginLeft: 8 }}>snoozed {timeUntil(monitor.snoozed_until)}</span>}
           {monitor.keep_alive_target && <span className="pl-badge pl-badge--signal" style={{ marginLeft: 8 }}>keep-alive</span>}
+          {!snoozed && monitor.current_status === "degraded" && <span className="pl-badge pl-badge--amber" style={{ marginLeft: 8 }}>slow</span>}
           {expiringSoon && <span className="pl-badge pl-badge--amber" style={{ marginLeft: 8 }}>expiring soon</span>}
         </div>
       </div>

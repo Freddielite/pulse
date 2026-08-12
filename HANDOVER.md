@@ -96,6 +96,26 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Degraded state**, distinct from up/down. Opt-in per monitor
+  (`degraded_threshold_ms`, NULL by default = off): a *passing* check
+  slower than the threshold bumps a separate `consecutive_slow` counter,
+  and once that streak hits `alert_after_slow` (default 3, same shape
+  as `alert_after_failures`) `current_status` flips to `degraded` and
+  fires one alert - lighter than a down alert on purpose: no incident
+  row, no repeat "still slow" nag every tick, just one nudge on the way
+  in and one ("back to normal speed") on the way out. Down still takes
+  priority - the degraded check only runs on the branch where the check
+  itself passed. Suggested default threshold is 1500ms, matching the
+  amber cutoff `lib/latency.js`'s `latencyColorForMs()` already used for
+  the response-time color scale, so "degraded" and "reads as amber
+  everywhere else in the UI" line up rather than being two different
+  numbers that happen to almost agree. `MonitorForm.jsx` gained a
+  toggle + two fields (threshold, streak count) right after the
+  existing failure-threshold field; `MonitorCard.jsx` and
+  `MonitorDetail.jsx` both show an amber "slow" badge and the dot gets
+  its own pulsing amber `pl-status-dot--degraded` class, mirroring the
+  existing up/down dot treatment instead of reusing red for something
+  that isn't actually down.
 - **Per-monitor check timeout.** `monitors.check_timeout_sec` (default
   15, bounded 3-60 at the API layer in `routes/monitors.js`), replacing
   the old fixed 15-second constant in both `httpCheck.js` and
@@ -313,3 +333,30 @@ curls the same URL works identically.
   scan as a plain-text file (score, timestamp, every finding with detail)
   client-side, no backend endpoint needed since the data's already loaded
   on the page.
+
+## Ideas for later
+
+Not built, just worth keeping track of. Deliberately excludes anything
+that would need Pulse to hold write access to another repo/host - that
+was considered (auto-fix for security header findings, opening a PR to
+fix them) and deliberately not built for exactly that reason.
+
+- **Weekly digest email.** A once-a-week summary (uptime %, any
+  incidents, cert/domain expiry heads-up) instead of only ever hearing
+  from Pulse when something's actively broken.
+- **TCP/port checks, not just HTTP.** For anything that isn't a web
+  endpoint (a database, a raw socket service) - a plain "can I open this
+  port" check, same retry/threshold/alerting machinery as the HTTP
+  checks already have.
+- **Scheduled maintenance windows** - pre-announce a window in advance
+  instead of manually snoozing each time; useful once client deploys
+  happen on a regular cadence. Purely a read/write against Pulse's own
+  DB, no external access, so this is back on the table now that the
+  auto-fix idea (the thing that actually needed outside write access) is
+  off it.
+- **CSV export of check/uptime history** - for when a client asks for
+  proof of downtime over a specific window.
+- **Combined status page** - one link showing several monitors together,
+  distinct from the existing per-monitor share links (`share_token` on
+  `monitors`) - for handing a client one page covering their whole stack
+  instead of one link per service.

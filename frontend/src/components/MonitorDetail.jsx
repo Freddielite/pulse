@@ -215,6 +215,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
                 multi-step - {(monitor.synthetic_steps || []).length} step{(monitor.synthetic_steps || []).length === 1 ? "" : "s"}
               </span>
             )}
+            {monitor.current_status === "degraded" && <span className="pl-badge pl-badge--amber">slow</span>}
           </div>
           <div className="pl-detail-url">{monitor.url}</div>
         </div>

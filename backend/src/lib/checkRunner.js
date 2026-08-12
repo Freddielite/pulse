@@ -117,10 +117,27 @@ async function checkOneMonitor(monitor) {
     // Below threshold: no incident, no alert - just the streak counter
     // ticking up, already persisted above.
   } else {
+    // Degraded state: a passing check that's slower than the monitor's
+    // own degraded_threshold_ms counts toward a separate slow-streak,
+    // independent of the down/up streak above. NULL threshold means the
+    // feature's off for this monitor, same opt-in shape as content-diff.
+    const wasDegraded = monitor.current_status === "degraded";
+    let newStatus = "up";
+    let slowStreak = 0;
+
+    if (monitor.degraded_threshold_ms && result.responseMs != null && result.responseMs > monitor.degraded_threshold_ms) {
+      slowStreak = (monitor.consecutive_slow || 0) + 1;
+      const slowThreshold = monitor.alert_after_slow || 3;
+      if (slowStreak >= slowThreshold) newStatus = "degraded";
+    }
+    // Any check that's either fast enough or has the feature off resets
+    // the streak to 0 and clears degraded back to up - "slow" only means
+    // something while it's actually still happening.
+
     await pool.query(
-      `UPDATE monitors SET current_status = 'up', consecutive_failures = 0, last_checked_at = now(), last_status_code = $2, last_response_ms = $3, updated_at = now()
+      `UPDATE monitors SET current_status = $2, consecutive_failures = 0, consecutive_slow = $3, last_checked_at = now(), last_status_code = $4, last_response_ms = $5, updated_at = now()
        WHERE id = $1`,
-      [monitor.id, result.statusCode, result.responseMs]
+      [monitor.id, newStatus, slowStreak, result.statusCode, result.responseMs]
     );
 
     if (wasAlertingDown) {
@@ -134,6 +151,15 @@ async function checkOneMonitor(monitor) {
         await alertRecovered(monitor, resolvedRows[0]);
         alerted = true;
       }
+    } else if (newStatus === "degraded" && !wasDegraded) {
+      // Fresh transition into degraded only - like alertDown, this fires
+      // once on the way in, not on every subsequent slow check, since
+      // this is meant to be a lighter nudge than a down alert.
+      await alertDegraded(monitor, result);
+      alerted = true;
+    } else if (wasDegraded && newStatus === "up") {
+      await alertNoLongerDegraded(monitor);
+      alerted = true;
     }
 
     // Content-diff monitoring: only meaningful on a passing check with a
@@ -307,6 +333,31 @@ async function alertContentChanged(monitor) {
   await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
   await sendTelegramMessage({ chatId: resolveChatId(user), text: `📝 ${title}\n${body}\n\n${monitor.url}` });
+}
+
+// Lighter than alertDown: no incident row, no repeat "still degraded"
+// nag every tick - just one nudge on the way in and one on the way out,
+// since a 200 that's merely slow isn't the same class of problem as an
+// actual outage.
+async function alertDegraded(monitor, result) {
+  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
+  const user = userRows[0];
+  if (!user) return;
+  const title = `${monitor.name} is responding slowly`;
+  const body = `Response time is ${result.responseMs}ms, above the ${monitor.degraded_threshold_ms}ms threshold for ${monitor.alert_after_slow || 3} checks in a row. Still returning a valid response - not down.`;
+  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟡 ${title}\n${body}\n\n${monitor.url}` });
+}
+
+async function alertNoLongerDegraded(monitor) {
+  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
+  const user = userRows[0];
+  if (!user) return;
+  const title = `${monitor.name} is back to normal speed`;
+  await sendPushToUser(monitor.user_id, { title, body: "Response time is back under the slow threshold.", url: `/monitors/${monitor.id}` });
+  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: "Response time is back under the slow threshold." });
+  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}` });
 }
 
 // Throttled to one nudge per calendar day per monitor+kind, so a 14-day

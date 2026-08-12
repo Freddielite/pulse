@@ -226,8 +226,26 @@ a {
   animation: pl-pulse-dot 2s ease-in-out infinite;
 }
 
+.pl-status-dot--degraded {
+  background: var(--amber);
+  box-shadow: 0 0 0 0 var(--amber-dim);
+  animation: pl-pulse-dot-amber 2s ease-in-out infinite;
+}
+
 .pl-status-dot--down {
   background: var(--alert);
+}
+
+@keyframes pl-pulse-dot-amber {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 184, 77, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(255, 184, 77, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 184, 77, 0);
+  }
 }
 
 @keyframes pl-pulse-dot {

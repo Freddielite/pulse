@@ -22,6 +22,9 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [bodyContains, setBodyContains] = useState(monitor?.body_contains || "");
   const [alertAfterFailures, setAlertAfterFailures] = useState(monitor?.alert_after_failures || 1);
   const [contentDiffEnabled, setContentDiffEnabled] = useState(monitor?.content_diff_enabled || false);
+  const [degradedEnabled, setDegradedEnabled] = useState(monitor?.degraded_threshold_ms != null);
+  const [degradedThresholdMs, setDegradedThresholdMs] = useState(monitor?.degraded_threshold_ms || 1500);
+  const [alertAfterSlow, setAlertAfterSlow] = useState(monitor?.alert_after_slow || 3);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -34,6 +37,10 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
     }
     if (Number(timeoutSec) < 3 || Number(timeoutSec) > 60) {
       setError("Check timeout must be between 3 and 60 seconds.");
+      return;
+    }
+    if (degradedEnabled && Number(degradedThresholdMs) < 100) {
+      setError("Slow threshold must be at least 100ms.");
       return;
     }
     setBusy(true);
@@ -53,6 +60,8 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       body_contains: bodyContains.trim() || null,
       alert_after_failures: Number(alertAfterFailures) || 1,
       content_diff_enabled: monitorType === "http" ? contentDiffEnabled : false,
+      degraded_threshold_ms: degradedEnabled ? Number(degradedThresholdMs) : null,
+      alert_after_slow: Number(alertAfterSlow) || 3,
     };
     try {
       if (editing) {
@@ -197,6 +206,44 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               flaky connections that fail a check or two before recovering on their own.
             </div>
           </div>
+          <div className="pl-toggle-row">
+            <div>
+              <span>Flag as degraded when responses get slow</span>
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>
+                A response can be a valid 200 and still be a problem if it's slow enough. This is separate from
+                down/up - it fires a lighter alert and doesn't open an incident.
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`pl-toggle ${degradedEnabled ? "on" : ""}`}
+              onClick={() => setDegradedEnabled(!degradedEnabled)}
+            >
+              <span className="pl-toggle__knob" />
+            </button>
+          </div>
+          {degradedEnabled && (
+            <div className="pl-field-row">
+              <div className="pl-field">
+                <label>Slow threshold (ms)</label>
+                <input
+                  type="number"
+                  min={100}
+                  value={degradedThresholdMs}
+                  onChange={(e) => setDegradedThresholdMs(e.target.value)}
+                />
+              </div>
+              <div className="pl-field">
+                <label>Consecutive slow checks before alerting</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={alertAfterSlow}
+                  onChange={(e) => setAlertAfterSlow(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
           <div className="pl-toggle-row">
             <span>This is a Render free-tier app I want to keep awake</span>
             <button type="button" className={`pl-toggle ${keepAlive ? "on" : ""}`} onClick={() => setKeepAlive(!keepAlive)}>
