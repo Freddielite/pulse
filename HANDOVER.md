@@ -96,6 +96,24 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Mobile layout fixes on the Status pages tab.** Two real bugs, not
+  just tightening: (1) `StatusPagesView.jsx`'s header row (the
+  explanatory text + "New status page" button) used a raw inline flex
+  style with no wrap, so on narrow screens the text and button got
+  squeezed onto one cramped line instead of stacking - switched it to
+  the same `.pl-dashboard-toolbar` / `.pl-dashboard-actions` classes the
+  Monitors tab's own toolbar already uses, so it inherits that existing
+  mobile stacking for free instead of needing its own media query. (2)
+  The nav pill for "Status pages" (`App.jsx`'s `.pl-nav`) is two words
+  where the other two tabs are one, so at mobile widths it wrapped onto
+  two lines and rendered visibly taller than "Monitors"/"Settings" next
+  to it - fixed with a mobile-only smaller font/padding + `white-space:
+  nowrap` on `.pl-nav button`, which keeps it on one line without
+  shrinking the desktop nav at all. Also trimmed the gap between the
+  24h/7d/30d numbers in `SharedStatusPageView.jsx`'s per-monitor rows on
+  mobile (new `.pl-status-page-row__stats` class, same pattern as
+  `.pl-monitor-card__stats` already had), matching the tightening every
+  other uptime-cell/stat block already got.
 - **Combined status pages** - one link showing several monitors together,
   distinct from `monitors.share_token` (still one link per monitor, for
   a client who only needs the one service). A new `status_pages` table

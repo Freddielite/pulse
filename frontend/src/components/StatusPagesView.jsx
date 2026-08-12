@@ -177,12 +177,14 @@ export default function StatusPagesView({ monitors, existingGroups = [], toast }
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div className="pl-dashboard-toolbar" style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: "var(--ink-faint)", maxWidth: 480 }}>
           One link showing several monitors together - hand a client a single page covering their whole stack
           instead of one per-monitor link each.
         </div>
-        <button className="pl-btn pl-btn--sm" onClick={() => setFormOpen(true)}>New status page</button>
+        <div className="pl-dashboard-actions">
+          <button className="pl-btn pl-btn--sm" onClick={() => setFormOpen(true)}>New status page</button>
+        </div>
       </div>
 
       {pages.length === 0 && (

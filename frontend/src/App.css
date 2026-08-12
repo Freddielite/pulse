@@ -289,6 +289,11 @@ a {
   flex-shrink: 0;
 }
 
+.pl-status-page-row__stats {
+  gap: 16px;
+  flex-shrink: 0;
+}
+
 .pl-stat {
   text-align: right;
 }
@@ -916,6 +921,9 @@ a {
   .pl-monitor-card__stats {
     gap: 10px;
   }
+  .pl-status-page-row__stats {
+    gap: 10px;
+  }
   .pl-dashboard-toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -929,6 +937,14 @@ a {
   }
   .pl-dashboard-actions .pl-btn {
     flex: 1;
+    white-space: nowrap;
+  }
+  .pl-nav {
+    gap: 2px;
+  }
+  .pl-nav button {
+    font-size: 12px;
+    padding: 8px 8px;
     white-space: nowrap;
   }
   .pl-finding-row {

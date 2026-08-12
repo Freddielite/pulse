@@ -99,7 +99,7 @@ export default function SharedStatusPageView({ token }) {
                 <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Checked {timeAgo(m.last_checked_at)}</div>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 16 }}>
+            <div className="pl-status-page-row__stats" style={{ display: "flex" }}>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["24h"] != null ? `${m.uptime["24h"]}%` : "N/A"}</div>
                 <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>24h</div>
