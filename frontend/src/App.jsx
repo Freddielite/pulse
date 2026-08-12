@@ -7,6 +7,7 @@ import Dashboard from "./components/Dashboard.jsx";
 import MonitorDetail from "./components/MonitorDetail.jsx";
 import MonitorForm from "./components/MonitorForm.jsx";
 import SettingsView from "./components/SettingsView.jsx";
+import StatusPagesView from "./components/StatusPagesView.jsx";
 
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = still checking, null = logged out
@@ -58,6 +59,7 @@ export default function App() {
         </div>
         <div className="pl-nav">
           <button className={tab === "dashboard" ? "active" : ""} onClick={() => { setTab("dashboard"); setSelectedId(null); }}>Monitors</button>
+          <button className={tab === "status-pages" ? "active" : ""} onClick={() => { setTab("status-pages"); setSelectedId(null); }}>Status pages</button>
           <button className={tab === "settings" ? "active" : ""} onClick={() => { setTab("settings"); setSelectedId(null); }}>Settings</button>
         </div>
       </div>
@@ -69,6 +71,10 @@ export default function App() {
 
       {tab === "dashboard" && selected && (
         <MonitorDetail monitor={selected} existingGroups={existingGroups} onBack={() => setSelectedId(null)} onChanged={loadMonitors} toast={toast} />
+      )}
+
+      {tab === "status-pages" && (
+        <StatusPagesView monitors={monitors} existingGroups={existingGroups} toast={toast} />
       )}
 
       {tab === "settings" && (

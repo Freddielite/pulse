@@ -72,6 +72,13 @@ export const enableMonitorShare = (id) => apiFetch(`/monitors/${id}/share`, { me
 export const regenerateMonitorShare = (id) => apiFetch(`/monitors/${id}/share/regenerate`, { method: "POST" });
 export const revokeMonitorShare = (id) => apiFetch(`/monitors/${id}/share`, { method: "DELETE" });
 
+export const listStatusPages = () => apiFetch("/status-pages");
+export const createStatusPage = (payload) => apiFetch("/status-pages", { method: "POST", body: JSON.stringify(payload) });
+export const updateStatusPage = (id, payload) => apiFetch(`/status-pages/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const regenerateStatusPage = (id) => apiFetch(`/status-pages/${id}/regenerate`, { method: "POST" });
+export const deleteStatusPage = (id) => apiFetch(`/status-pages/${id}`, { method: "DELETE" });
+export const getSharedStatusPage = (token) => apiFetch(`/public/status-pages/${token}`);
+
 // Unauthenticated reads behind a monitor's share link - same apiFetch
 // wrapper (sending a session cookie here is harmless, just unnecessary),
 // just under the /public prefix the backend leaves outside requireAuth.

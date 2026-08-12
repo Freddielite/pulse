@@ -97,4 +97,72 @@ router.get("/monitors/:token/security", async (req, res) => {
   res.json(rows[0] || null);
 });
 
+// Combined status pages: one link, several monitors. group_name pages
+// resolve live off the current group membership; monitor_ids pages are
+// a fixed manual list captured at creation time. Either way, the result
+// is the same narrow per-monitor shape the single-monitor share view
+// uses - no auth header, no synthetic steps, no owner - plus a rolled-up
+// uptime % per monitor for 24h/7d/30d, computed here rather than making
+// the frontend fan out to N separate uptime calls.
+async function findStatusPageByToken(token) {
+  const { rows } = await pool.query(`SELECT * FROM status_pages WHERE share_token = $1`, [token]);
+  return rows[0] || null;
+}
+
+async function resolveStatusPageMonitors(page) {
+  if (page.group_name) {
+    const { rows } = await pool.query(
+      `SELECT id, name, url, monitor_type, current_status, last_checked_at, last_response_ms
+       FROM monitors WHERE user_id = $1 AND group_name = $2 AND active = true ORDER BY name ASC`,
+      [page.user_id, page.group_name]
+    );
+    return rows;
+  }
+  const ids = page.monitor_ids || [];
+  if (ids.length === 0) return [];
+  const { rows } = await pool.query(
+    `SELECT id, name, url, monitor_type, current_status, last_checked_at, last_response_ms
+     FROM monitors WHERE id = ANY($1::uuid[]) AND user_id = $2 AND active = true ORDER BY name ASC`,
+    [ids, page.user_id]
+  );
+  return rows;
+}
+
+router.get("/status-pages/:token", async (req, res) => {
+  const page = await findStatusPageByToken(req.params.token);
+  if (!page) return res.status(404).json(NOT_FOUND);
+  const monitors = await resolveStatusPageMonitors(page);
+  if (monitors.length === 0) return res.json({ name: page.name, monitors: [] });
+
+  const ids = monitors.map((m) => m.id);
+  const { rows: uptimeRows } = await pool.query(
+    `SELECT
+       monitor_id,
+       window_days,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'up') / NULLIF(COUNT(*), 0), 2) AS uptime_pct
+     FROM checks, (VALUES (1), (7), (30)) AS windows(window_days)
+     WHERE monitor_id = ANY($1::uuid[]) AND checked_at >= now() - (window_days || ' days')::interval
+     GROUP BY monitor_id, window_days`,
+    [ids]
+  );
+  const byMonitor = {};
+  for (const row of uptimeRows) {
+    byMonitor[row.monitor_id] = byMonitor[row.monitor_id] || {};
+    const key = row.window_days === 1 ? "24h" : row.window_days === 7 ? "7d" : "30d";
+    byMonitor[row.monitor_id][key] = row.uptime_pct;
+  }
+
+  res.json({
+    name: page.name,
+    monitors: monitors.map((m) => ({
+      ...m,
+      uptime: {
+        "24h": byMonitor[m.id]?.["24h"] ?? null,
+        "7d": byMonitor[m.id]?.["7d"] ?? null,
+        "30d": byMonitor[m.id]?.["30d"] ?? null,
+      },
+    })),
+  });
+});
+
 export default router;

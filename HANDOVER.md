@@ -96,6 +96,30 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Combined status pages** - one link showing several monitors together,
+  distinct from `monitors.share_token` (still one link per monitor, for
+  a client who only needs the one service). A new `status_pages` table
+  is either group-based (`group_name` - live, so adding a monitor to
+  that group later shows up on the page automatically) or manual
+  (`monitor_ids`, a fixed JSONB array picked at creation time) - never
+  both, enforced in `routes/statusPages.js` rather than a CHECK
+  constraint, same "cross-field validation lives in the API layer"
+  pattern `validateSteps` already uses for synthetic monitors. The
+  public read (`GET /api/public/status-pages/:token` in `routes/public.js`)
+  resolves the monitor list live from whichever mode the page uses, then
+  computes 24h/7d/30d uptime % for all of them in one grouped query
+  rather than making the frontend fan out to N separate uptime calls.
+  Same narrow field set as the existing per-monitor share view - no auth
+  header, no synthetic steps, no owner - plus the rolled-up uptime.
+  Management UI is a new "Status pages" tab (`StatusPagesView.jsx`):
+  create with a name and either a group dropdown or a monitor checklist,
+  copy/regenerate the link, edit, delete. The link itself is
+  `#/status/<token>`, resolved in `main.jsx` before `App` mounts -
+  identical no-session treatment to `#/share/<token>` - and rendered by
+  `SharedStatusPageView.jsx`, a flat list of monitor rows (status dot,
+  name, last-checked, 24h/7d/30d uptime) rather than the deep-dive chart
+  a single-monitor share page gets; anyone wanting more detail on one
+  monitor specifically still uses that monitor's own share link.
 - **Weekly digest**, opt-in per user (`users.digest_enabled`, off by
   default). Once turned on, `lib/digest.js`'s `runDigestSweep()` - called
   from the cron tick alongside the cert/security sweeps - sends one
@@ -373,7 +397,3 @@ fix them) and deliberately not built for exactly that reason.
   off it.
 - **CSV export of check/uptime history** - for when a client asks for
   proof of downtime over a specific window.
-- **Combined status page** - one link showing several monitors together,
-  distinct from the existing per-monitor share links (`share_token` on
-  `monitors`) - for handing a client one page covering their whole stack
-  instead of one link per service.

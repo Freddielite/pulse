@@ -235,6 +235,29 @@ export async function migrate() {
 
     CREATE INDEX IF NOT EXISTS idx_security_scans_monitor_time ON security_scans(monitor_id, scanned_at DESC);
 
+    -- Combined status pages: one link showing several monitors together,
+    -- distinct from monitors.share_token (one link per monitor). Exactly
+    -- one of group_name / monitor_ids is set per row - group_name means
+    -- "live" membership (adding a monitor to that group later shows up
+    -- automatically, no edit needed), monitor_ids is a fixed manual list
+    -- for a page that doesn't correspond to an existing group. Enforced
+    -- at the API layer (routes/statusPages.js), not a CHECK constraint,
+    -- since "exactly one of two nullable columns" is awkward to express
+    -- well in SQL and the API layer already owns every other cross-field
+    -- validation in this app (see validateSteps for synthetic monitors).
+    CREATE TABLE IF NOT EXISTS status_pages (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name          TEXT NOT NULL,
+      share_token   TEXT UNIQUE NOT NULL,
+      group_name    TEXT,
+      monitor_ids   JSONB,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_status_pages_user_id ON status_pages(user_id);
+
     -- Bearer tokens for scripting against Pulse directly (cron jobs, other
     -- tools) instead of only through the browser session. Only the hash is
     -- stored - the raw token is generated once, returned once in the POST
