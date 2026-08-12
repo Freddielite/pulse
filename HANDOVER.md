@@ -96,6 +96,22 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Fixed inconsistent row layout on the public combined status page.**
+  `SharedStatusPageView.jsx`'s per-monitor row used `flexWrap: "wrap"`
+  with no truncation on the name, so whether the 24h/7d/30d stats sat
+  inline or dropped to their own line depended on how long that
+  particular monitor's name happened to be - "Focusdial" fit on one
+  line, "Expenses tracker" didn't, so the two rows looked inconsistently
+  laid out next to each other even though nothing was actually broken.
+  `MonitorCard.jsx` already solved this exact shape (dot + name on the
+  left, stats on the right) the other way: never wrap, truncate the name
+  with an ellipsis instead (`.pl-monitor-card__main`'s `flex: 1;
+  min-width: 0` plus `.pl-monitor-card__name`'s `white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis`). Rebuilt the status-page
+  row the same way instead of inventing a second approach - name/dot
+  block gets `flex: 1; min-width: 0`, the stats block gets
+  `flex-shrink: 0`, name truncates. Every row now behaves identically
+  regardless of name length.
 - **Fixed the monitor checklist in "New status page."** `.pl-field
   input` is a descendant selector meant for the one direct text-input
   child a `.pl-field` normally has - it was also reaching the checkboxes

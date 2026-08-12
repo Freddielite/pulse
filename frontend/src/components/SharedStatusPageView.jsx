@@ -91,15 +91,15 @@ export default function SharedStatusPageView({ token }) {
         </div>
       ) : (
         page.monitors.map((m) => (
-          <div className="pl-panel" key={m.id} style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="pl-panel" key={m.id} style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
               <div className={`pl-status-dot ${m.current_status === "up" ? "pl-status-dot--up" : m.current_status === "degraded" ? "pl-status-dot--degraded" : m.current_status === "down" ? "pl-status-dot--down" : ""}`} />
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{m.name}</div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</div>
                 <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Checked {timeAgo(m.last_checked_at)}</div>
               </div>
             </div>
-            <div className="pl-status-page-row__stats" style={{ display: "flex" }}>
+            <div className="pl-status-page-row__stats" style={{ display: "flex", flexShrink: 0 }}>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["24h"] != null ? `${m.uptime["24h"]}%` : "N/A"}</div>
                 <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>24h</div>
