@@ -1,6 +1,7 @@
 import { pool } from "../db.js";
 import { runHttpCheck } from "./httpCheck.js";
 import { runSyntheticCheck } from "./syntheticCheck.js";
+import { runTcpCheck } from "./tcpCheck.js";
 import { getSslExpiry, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
@@ -54,12 +55,16 @@ export async function runUptimeChecks(monitorRows) {
 
 async function checkOneMonitor(monitor) {
   // Dispatch by type: a synthetic monitor's "check" is an ordered
-  // sequence of requests (syntheticCheck.js), not the single
-  // request/response httpCheck.js handles. Both return the same
-  // { status, statusCode, responseMs, errorMessage, contentHash } shape,
-  // so everything below this line - logging, alerting, thresholds - is
-  // identical either way and doesn't need to know which kind ran.
-  const result = monitor.monitor_type === "synthetic" ? await runSyntheticCheck(monitor) : await runHttpCheck(monitor);
+  // sequence of requests (syntheticCheck.js), a tcp monitor is a raw
+  // socket connect (tcpCheck.js), neither is the single request/response
+  // httpCheck.js handles. All three return the same { status, statusCode,
+  // responseMs, errorMessage, contentHash } shape, so everything below
+  // this line - logging, alerting, thresholds - is identical regardless
+  // of which kind ran.
+  const result =
+    monitor.monitor_type === "synthetic" ? await runSyntheticCheck(monitor)
+    : monitor.monitor_type === "tcp" ? await runTcpCheck(monitor)
+    : await runHttpCheck(monitor);
 
   // The raw per-check result is always logged as-is, threshold or no -
   // the checks table (and the uptime chart/heatmap built on it) should
@@ -259,6 +264,10 @@ export async function runCertSweep({ userId = null, limit = MAX_CERT_CHECKS_PER_
 export async function runSecuritySweep({ userId = null, limit = MAX_SECURITY_SCANS_PER_RUN } = {}) {
   const conditions = [
     `active = true`,
+    // scanSite does plain HTTP requests (headers, exposed paths) - not
+    // meaningful (and not even reachable, fetch() has no tcp: scheme)
+    // for a tcp-type monitor.
+    `monitor_type != 'tcp'`,
     `(security_scanned_at IS NULL OR security_scanned_at <= now() - interval '${SECURITY_SCAN_INTERVAL_HOURS} hours')`,
   ];
   const params = [];

@@ -215,6 +215,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
                 multi-step - {(monitor.synthetic_steps || []).length} step{(monitor.synthetic_steps || []).length === 1 ? "" : "s"}
               </span>
             )}
+            {monitor.monitor_type === "tcp" && <span className="pl-badge pl-badge--muted">TCP / port</span>}
             {monitor.current_status === "degraded" && <span className="pl-badge pl-badge--amber">slow</span>}
           </div>
           <div className="pl-detail-url">{monitor.url}</div>
@@ -275,17 +276,21 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
 
       <ResponseTimeChart checks={checks} />
 
-      <div className="pl-section-label">Certificate &amp; domain</div>
-      <div className="pl-panel">
-        <div className="pl-expiry-row">
-          <span className="pl-expiry-row__label">SSL certificate expires</span>
-          <span>{monitor.ssl_expires_at ? formatDate(monitor.ssl_expires_at) : "Not checked yet"}</span>
-        </div>
-        <div className="pl-expiry-row">
-          <span className="pl-expiry-row__label">Domain registration expires</span>
-          <span>{monitor.domain_expires_at ? formatDate(monitor.domain_expires_at) : "Unknown (best-effort lookup)"}</span>
-        </div>
-      </div>
+      {monitor.monitor_type !== "tcp" && (
+        <>
+          <div className="pl-section-label">Certificate &amp; domain</div>
+          <div className="pl-panel">
+            <div className="pl-expiry-row">
+              <span className="pl-expiry-row__label">SSL certificate expires</span>
+              <span>{monitor.ssl_expires_at ? formatDate(monitor.ssl_expires_at) : "Not checked yet"}</span>
+            </div>
+            <div className="pl-expiry-row">
+              <span className="pl-expiry-row__label">Domain registration expires</span>
+              <span>{monitor.domain_expires_at ? formatDate(monitor.domain_expires_at) : "Unknown (best-effort lookup)"}</span>
+            </div>
+          </div>
+        </>
+      )}
 
       {monitor.content_diff_enabled && (
         <>
@@ -299,67 +304,71 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
         </>
       )}
 
-      <div className="pl-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 8px" }}>
-        <span>Security scan</span>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {security && (
-            <button
-              type="button"
-              className="pl-btn pl-btn--ghost"
-              style={{ fontSize: 11, padding: "3px 10px" }}
-              onClick={handleDownloadReport}
-            >
-              Download report
-            </button>
-          )}
-          <button
-            type="button"
-            className="pl-btn pl-btn--ghost"
-            style={{ fontSize: 11, padding: "3px 10px" }}
-            onClick={handleRunScan}
-            disabled={scanning}
-          >
-            {scanning ? "Scanning…" : "Rescan now"}
-          </button>
-        </div>
-      </div>
-      <div className="pl-panel">
-        {!security ? (
-          <div style={{ color: "var(--ink-dim)", fontSize: 13 }}>
-            Not scanned yet. Runs automatically once a day, or hit "Rescan now."
-          </div>
-        ) : (
-          <>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-              <span
-                className={`pl-badge ${
-                  security.score >= 90 ? "pl-badge--signal" : security.score >= 70 ? "pl-badge--amber" : "pl-badge--amber"
-                }`}
-                style={security.score < 70 ? { background: "var(--alert-dim)", color: "var(--alert)" } : undefined}
-              >
-                {security.score}/100
-              </span>
-              <span style={{ color: "var(--ink-dim)", fontSize: 12 }}>
-                Last scanned {formatDateTime(security.scanned_at)}
-              </span>
-            </div>
-            {security.findings.map((f, i) => (
-              <div key={i} className="pl-finding-row" style={{ borderTop: i === 0 ? "none" : undefined }}>
-                <div className="pl-finding-row__text">
-                  <div style={{ color: f.pass ? "var(--ink)" : "var(--alert)" }}>{f.check}</div>
-                  <div className="pl-finding-row__detail">{f.detail}</div>
-                </div>
-                <div
-                  className="pl-finding-row__result"
-                  style={{ color: f.pass ? "var(--signal)" : "var(--alert)" }}
+      {monitor.monitor_type !== "tcp" && (
+        <>
+          <div className="pl-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 8px" }}>
+            <span>Security scan</span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {security && (
+                <button
+                  type="button"
+                  className="pl-btn pl-btn--ghost"
+                  style={{ fontSize: 11, padding: "3px 10px" }}
+                  onClick={handleDownloadReport}
                 >
-                  {f.pass ? "Pass" : "Fail"}
-                </div>
+                  Download report
+                </button>
+              )}
+              <button
+                type="button"
+                className="pl-btn pl-btn--ghost"
+                style={{ fontSize: 11, padding: "3px 10px" }}
+                onClick={handleRunScan}
+                disabled={scanning}
+              >
+                {scanning ? "Scanning…" : "Rescan now"}
+              </button>
+            </div>
+          </div>
+          <div className="pl-panel">
+            {!security ? (
+              <div style={{ color: "var(--ink-dim)", fontSize: 13 }}>
+                Not scanned yet. Runs automatically once a day, or hit "Rescan now."
               </div>
-            ))}
-          </>
-        )}
-      </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                  <span
+                    className={`pl-badge ${
+                      security.score >= 90 ? "pl-badge--signal" : security.score >= 70 ? "pl-badge--amber" : "pl-badge--amber"
+                    }`}
+                    style={security.score < 70 ? { background: "var(--alert-dim)", color: "var(--alert)" } : undefined}
+                  >
+                    {security.score}/100
+                  </span>
+                  <span style={{ color: "var(--ink-dim)", fontSize: 12 }}>
+                    Last scanned {formatDateTime(security.scanned_at)}
+                  </span>
+                </div>
+                {security.findings.map((f, i) => (
+                  <div key={i} className="pl-finding-row" style={{ borderTop: i === 0 ? "none" : undefined }}>
+                    <div className="pl-finding-row__text">
+                      <div style={{ color: f.pass ? "var(--ink)" : "var(--alert)" }}>{f.check}</div>
+                      <div className="pl-finding-row__detail">{f.detail}</div>
+                    </div>
+                    <div
+                      className="pl-finding-row__result"
+                      style={{ color: f.pass ? "var(--signal)" : "var(--alert)" }}
+                    >
+                      {f.pass ? "Pass" : "Fail"}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </>
+      )}
 
       <div className="pl-section-label">Share link</div>
       <div className="pl-panel">

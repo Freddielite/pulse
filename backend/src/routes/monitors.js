@@ -8,11 +8,27 @@ import { generateShareToken } from "../lib/shareLinks.js";
 const router = Router();
 router.use(requireAuth);
 
-// monitor_type as sent by the client, coerced to one of the two real
+// monitor_type as sent by the client, coerced to one of the three real
 // values. Anything unrecognized falls back to 'http' - the safe default,
-// since an http monitor's steps are simply ignored rather than acted on.
+// since an http monitor's steps/tcp target are simply ignored rather
+// than acted on.
 function normalizeMonitorType(type) {
-  return type === "synthetic" ? "synthetic" : "http";
+  if (type === "synthetic") return "synthetic";
+  if (type === "tcp") return "tcp";
+  return "http";
+}
+
+// Only enforced for a tcp-type monitor - http/synthetic monitors' urls
+// are already covered by the generic new URL(url) check at the top of
+// each route. tcp:// parses fine under that generic check too (it's a
+// syntactically valid, if unusual, URL scheme), so this catches the two
+// things that check alone wouldn't: the wrong scheme, and a missing port
+// (tcpCheck.js's parseTcpTarget has nothing to connect to without one).
+function validateTcpUrl(url) {
+  const parsed = new URL(url); // caller already confirmed this doesn't throw
+  if (parsed.protocol !== "tcp:") return "a TCP monitor's URL must start with tcp://, e.g. tcp://db.example.com:5432";
+  if (!parsed.port) return "a TCP monitor's URL needs a port, e.g. tcp://db.example.com:5432";
+  return null;
 }
 
 // Shared by both create and update. Only enforced when the monitor is (or
@@ -86,6 +102,10 @@ router.post("/", async (req, res) => {
   const type = normalizeMonitorType(monitor_type);
   const stepsError = validateSteps(type, synthetic_steps);
   if (stepsError) return res.status(400).json({ error: stepsError });
+  if (type === "tcp") {
+    const tcpError = validateTcpUrl(url);
+    if (tcpError) return res.status(400).json({ error: tcpError });
+  }
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
@@ -140,6 +160,10 @@ router.patch("/:id", async (req, res) => {
   if (monitor_type !== undefined) {
     const stepsError = validateSteps(normalizeMonitorType(monitor_type), synthetic_steps);
     if (stepsError) return res.status(400).json({ error: stepsError });
+    if (normalizeMonitorType(monitor_type) === "tcp" && url) {
+      const tcpError = validateTcpUrl(url);
+      if (tcpError) return res.status(400).json({ error: tcpError });
+    }
   }
   try {
     const willTouchSteps = monitor_type !== undefined;
@@ -300,6 +324,9 @@ router.post("/:id/security/run", async (req, res) => {
   const owns = await pool.query(`SELECT * FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
   if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
   const monitor = owns.rows[0];
+  if (monitor.monitor_type === "tcp") {
+    return res.status(400).json({ error: "Security scanning doesn't apply to a TCP monitor - there's no HTTP response to check headers on." });
+  }
 
   const result = await scanSite(monitor.url);
   const { rows } = await pool.query(

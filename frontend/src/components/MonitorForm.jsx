@@ -9,7 +9,9 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const editing = !!monitor;
   const [name, setName] = useState(monitor?.name || "");
   const [url, setUrl] = useState(monitor?.url || "");
-  const [monitorType, setMonitorType] = useState(monitor?.monitor_type === "synthetic" ? "synthetic" : "http");
+  const [monitorType, setMonitorType] = useState(
+    monitor?.monitor_type === "synthetic" ? "synthetic" : monitor?.monitor_type === "tcp" ? "tcp" : "http"
+  );
   const [steps, setSteps] = useState(monitor?.synthetic_steps?.length ? monitor.synthetic_steps : [DEFAULT_STEP]);
   const [method, setMethod] = useState(monitor?.method || "GET");
   const [expectedStatus, setExpectedStatus] = useState(monitor?.expected_status || 200);
@@ -33,6 +35,10 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
     setError(null);
     if (monitorType === "synthetic" && steps.some((s) => !s.url?.trim())) {
       setError("Every step needs a URL.");
+      return;
+    }
+    if (monitorType === "tcp" && !/^tcp:\/\/[^/]+:\d+$/.test(url.trim())) {
+      setError("A TCP monitor's URL must look like tcp://host:port, e.g. tcp://db.example.com:5432.");
       return;
     }
     if (Number(timeoutSec) < 3 || Number(timeoutSec) > 60) {
@@ -89,8 +95,24 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wyntek API" required autoFocus />
           </div>
           <div className="pl-field">
-            <label>URL{monitorType === "synthetic" ? " (for the SSL/domain check and the list - not itself one of the steps below)" : ""}</label>
-            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/health" required />
+            <label>
+              {monitorType === "tcp"
+                ? "Host and port"
+                : `URL${monitorType === "synthetic" ? " (for the SSL/domain check and the list - not itself one of the steps below)" : ""}`}
+            </label>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder={monitorType === "tcp" ? "tcp://db.example.com:5432" : "https://api.example.com/health"}
+              required
+            />
+            {monitorType === "tcp" && (
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+                tcp://host:port - for anything that isn't a web endpoint (a database, a message queue, a raw socket
+                service). No SSL/domain expiry tracking or security scan for this monitor, since there's no HTTPS
+                response to check either of those against.
+              </div>
+            )}
           </div>
           <div className="pl-field">
             <label>Check type</label>
@@ -100,6 +122,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               options={[
                 { value: "http", label: "Single request" },
                 { value: "synthetic", label: "Multi-step (login flow, multi-hop API check)" },
+                { value: "tcp", label: "TCP / port (database, non-HTTP service)" },
               ]}
             />
             {monitorType === "synthetic" && (
@@ -110,7 +133,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               </div>
             )}
           </div>
-          {monitorType === "http" ? (
+          {monitorType === "http" && (
             <div className="pl-field-row">
               <div className="pl-field">
                 <label>Method</label>
@@ -129,10 +152,18 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
                 <input type="number" value={expectedStatus} onChange={(e) => setExpectedStatus(e.target.value)} />
               </div>
             </div>
-          ) : (
+          )}
+          {monitorType === "synthetic" && (
             <div className="pl-field">
               <label>Steps</label>
               <SyntheticStepsEditor steps={steps} onChange={setSteps} />
+            </div>
+          )}
+          {monitorType === "tcp" && (
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 14 }}>
+              A pass just means a TCP connection to the host and port above completed within the timeout below -
+              nothing about what's actually listening there is inspected, which is what makes this work for anything
+              that speaks TCP rather than only HTTP endpoints.
             </div>
           )}
           <div className="pl-field">
@@ -154,18 +185,21 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               How long to wait for a response before recording this check as down. Raise it for a legitimately slow
               endpoint (a cold-start API, a heavy report page) that just needs more time, not an alert.
               {monitorType === "synthetic" && " Applies per step, not to the whole sequence."}
+              {monitorType === "tcp" && " How long to wait for the TCP connection itself to complete."}
             </div>
           </div>
-          <div className="pl-field-row">
-            <div className="pl-field">
-              <label>Auth header name (optional)</label>
-              <input value={authHeaderName} onChange={(e) => setAuthHeaderName(e.target.value)} placeholder="Authorization" />
+          {monitorType !== "tcp" && (
+            <div className="pl-field-row">
+              <div className="pl-field">
+                <label>Auth header name (optional)</label>
+                <input value={authHeaderName} onChange={(e) => setAuthHeaderName(e.target.value)} placeholder="Authorization" />
+              </div>
+              <div className="pl-field">
+                <label>Auth header value (optional)</label>
+                <input value={authHeaderValue} onChange={(e) => setAuthHeaderValue(e.target.value)} placeholder="Bearer ..." />
+              </div>
             </div>
-            <div className="pl-field">
-              <label>Auth header value (optional)</label>
-              <input value={authHeaderValue} onChange={(e) => setAuthHeaderValue(e.target.value)} placeholder="Bearer ..." />
-            </div>
-          </div>
+          )}
           <div className="pl-field">
             <label>Group (optional)</label>
             <input

@@ -96,6 +96,32 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **TCP/port checks, a third monitor_type alongside http and synthetic.**
+  For anything that isn't a web endpoint - a database, a message queue, a
+  raw socket service. `lib/tcpCheck.js` just opens a TCP connection to
+  `tcp://host:port` and checks it completes within the timeout; nothing
+  about what's actually listening there is inspected, which is what
+  makes it work for arbitrary TCP services rather than only HTTP ones.
+  Same result shape (`{ status, statusCode, responseMs, errorMessage,
+  contentHash }`) and same one-retry-before-it-counts behavior as
+  `httpCheck.js`, for the same reason - a transient connection blip
+  shouldn't open an incident on its own. `checkRunner.js`'s dispatch is
+  now a three-way switch on `monitor_type` instead of two; everything
+  past that point (logging, thresholds, degraded-state, alerting) is
+  unchanged and doesn't know which check type ran.
+  Deliberately excluded rather than made to silently no-op: the cert
+  sweep already only picks up `url LIKE 'https://%'` so tcp:// monitors
+  were never going to reach it, but the security-scan sweep had no such
+  filter and would have handed `scanSite()` a `tcp://` URL `fetch()`
+  can't touch - added a `monitor_type != 'tcp'` condition there, and the
+  manual "Rescan now" route now returns a plain 400 instead of an ugly
+  fetch failure. Frontend hides the Certificate & domain and Security
+  scan sections entirely on a TCP monitor's detail page rather than
+  showing them permanently empty. `routes/monitors.js` validates a
+  tcp-type monitor's URL at save time (`tcp://` scheme, port required) -
+  `new URL()` alone accepts `tcp://host` with no port just fine, since
+  it's a syntactically valid if useless URL.
+
 - **Fixed inconsistent row layout on the public combined status page.**
   `SharedStatusPageView.jsx`'s per-monitor row used `flexWrap: "wrap"`
   with no truncation on the name, so whether the 24h/7d/30d stats sat
@@ -430,10 +456,6 @@ that would need Pulse to hold write access to another repo/host - that
 was considered (auto-fix for security header findings, opening a PR to
 fix them) and deliberately not built for exactly that reason.
 
-- **TCP/port checks, not just HTTP.** For anything that isn't a web
-  endpoint (a database, a raw socket service) - a plain "can I open this
-  port" check, same retry/threshold/alerting machinery as the HTTP
-  checks already have.
 - **Scheduled maintenance windows** - pre-announce a window in advance
   instead of manually snoozing each time; useful once client deploys
   happen on a regular cadence. Purely a read/write against Pulse's own
