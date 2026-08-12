@@ -79,20 +79,35 @@ curls the same URL works identically.
 
 ## Known limitations, stated plainly
 
-- **Domain (WHOIS) expiry is best-effort.** WHOIS response formats aren't
-  standardized across registrars, so parsing relies on matching a handful
-  of common field names. If a monitor's domain expiry shows "unknown," the
-  lookup either failed or used a format the parser doesn't recognize -
-  it's not a promise the domain never expires. SSL certificate expiry, by
-  contrast, is read directly off the live TLS handshake and is reliable.
+- **Domain (WHOIS) expiry is still best-effort, by nature of WHOIS
+  itself.** Response formats aren't standardized across registrars -
+  `lib/certCheck.js` now matches a wider set of field names (including
+  JPRS's bracketed `[Expires on]` format and a few date shapes like
+  `2027/01/01` that `new Date()` doesn't parse on its own) and explicitly
+  follows referral servers for thin-registry TLDs, but there is no
+  registry-agnostic way to guarantee a parse. If a monitor's domain
+  expiry shows "unknown," the lookup either failed or used a format the
+  parser still doesn't recognize - it's not a promise the domain never
+  expires. SSL certificate expiry, by contrast, is read directly off the
+  live TLS handshake and is reliable.
 - **WHOIS needs outbound TCP on port 43.** Most hosts allow this, but
   it's not universal. If every domain expiry check fails on your Render
   instance, this is the first thing to check.
-- **The 15-second check timeout** applies to every HTTP check. A
-  legitimately slow endpoint that takes longer than that will be recorded
-  as down. Not currently configurable per-monitor.
 
 ## Recent changes
+
+- **Per-monitor check timeout.** `monitors.check_timeout_sec` (default
+  15, bounded 3-60 at the API layer in `routes/monitors.js`), replacing
+  the old fixed 15-second constant in both `httpCheck.js` and
+  `syntheticCheck.js` (per step there, same as the timeout always
+  applied per step rather than to the whole sequence). Exists because a
+  legitimately slow endpoint - a cold-start API, a heavy report page -
+  had no way to avoid being recorded as "down" purely for being slow.
+  Set per monitor in `MonitorForm.jsx`, right under the check-interval
+  field.
+- **Broader WHOIS expiry parsing**, `lib/certCheck.js` - see "Known
+  limitations" above for what changed and what's still inherently
+  unfixable about it.
 
 - **Read-only share links, per monitor.** `monitors.share_token`
   (nullable, unique) - NULL means sharing's off. "Create share link" in
@@ -298,13 +313,3 @@ curls the same URL works identically.
   scan as a plain-text file (score, timestamp, every finding with detail)
   client-side, no backend endpoint needed since the data's already loaded
   on the page.
-
-## Ideas for later
-
-Not built, just worth keeping track of:
-
-- **Scheduled maintenance windows** - pre-announce a window in advance
-  instead of manually snoozing each time; useful once client deploys
-  happen on a regular cadence.
-- **CSV export of check/uptime history** - for when a client asks for
-  proof of downtime over a specific window.

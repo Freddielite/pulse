@@ -14,6 +14,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [method, setMethod] = useState(monitor?.method || "GET");
   const [expectedStatus, setExpectedStatus] = useState(monitor?.expected_status || 200);
   const [interval, setInterval] = useState(monitor?.check_interval_min || 5);
+  const [timeoutSec, setTimeoutSec] = useState(monitor?.check_timeout_sec || 15);
   const [authHeaderName, setAuthHeaderName] = useState(monitor?.auth_header_name || "");
   const [authHeaderValue, setAuthHeaderValue] = useState(monitor?.auth_header_value || "");
   const [keepAlive, setKeepAlive] = useState(monitor?.keep_alive_target || false);
@@ -31,6 +32,10 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       setError("Every step needs a URL.");
       return;
     }
+    if (Number(timeoutSec) < 3 || Number(timeoutSec) > 60) {
+      setError("Check timeout must be between 3 and 60 seconds.");
+      return;
+    }
     setBusy(true);
     const payload = {
       name: name.trim(),
@@ -40,6 +45,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       method,
       expected_status: Number(expectedStatus),
       check_interval_min: Number(interval),
+      check_timeout_sec: Number(timeoutSec),
       auth_header_name: authHeaderName.trim() || null,
       auth_header_value: authHeaderValue.trim() || null,
       keep_alive_target: keepAlive,
@@ -131,6 +137,15 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
                 Render free-tier apps sleep after 15 minutes idle. An interval this long may not keep it awake.
               </div>
             )}
+          </div>
+          <div className="pl-field">
+            <label>Check timeout (seconds)</label>
+            <input type="number" min={3} max={60} value={timeoutSec} onChange={(e) => setTimeoutSec(e.target.value)} />
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+              How long to wait for a response before recording this check as down. Raise it for a legitimately slow
+              endpoint (a cold-start API, a heavy report page) that just needs more time, not an alert.
+              {monitorType === "synthetic" && " Applies per step, not to the whole sequence."}
+            </div>
           </div>
           <div className="pl-field-row">
             <div className="pl-field">

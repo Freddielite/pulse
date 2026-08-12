@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-const CHECK_TIMEOUT_MS = 15000;
+const DEFAULT_CHECK_TIMEOUT_MS = 15000;
 const RETRY_DELAY_MS = 4000;
 
 function sleep(ms) {
@@ -14,9 +14,13 @@ function sleep(ms) {
 // monitor has content-diff monitoring on - see checkRunner.js for what it
 // does with it.
 async function runSingleAttempt(monitor) {
+  // check_timeout_sec is per-monitor (see db.js) - falls back to the old
+  // fixed default for any row from before that column existed, or if it's
+  // ever null for some other reason.
+  const timeoutMs = (monitor.check_timeout_sec || DEFAULT_CHECK_TIMEOUT_MS / 1000) * 1000;
   const start = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   const headers = {};
   if (monitor.auth_header_name && monitor.auth_header_value) {
@@ -74,7 +78,7 @@ async function runSingleAttempt(monitor) {
     // whenever there is one.
     let errorMessage;
     if (err.name === "AbortError") {
-      errorMessage = `Timed out after ${CHECK_TIMEOUT_MS / 1000}s`;
+      errorMessage = `Timed out after ${timeoutMs / 1000}s`;
     } else if (err.cause?.message) {
       errorMessage = `${err.message}: ${err.cause.message}`;
     } else {

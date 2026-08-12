@@ -142,6 +142,16 @@ export async function migrate() {
     -- any number of monitors to share the NULL "not shared" state while
     -- still guaranteeing two live links never collide.
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS share_token TEXT UNIQUE;
+    -- Per-request timeout for this monitor's checks, in seconds. Used by
+    -- both httpCheck.js (once, for the single request) and
+    -- syntheticCheck.js (per step - a 5-step synthetic check can still
+    -- take up to 5x this in the worst case, same as it always could).
+    -- Previously a hardcoded 15s for every monitor regardless of what it
+    -- watched; a legitimately slow endpoint (a cold-start API, a heavy
+    -- report page) had no way to avoid being recorded as "down" just for
+    -- being slow. Bounded 3-60s at the API layer, not just in the form -
+    -- see the checks in routes/monitors.js.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS check_timeout_sec INTEGER NOT NULL DEFAULT 15;
 
     CREATE TABLE IF NOT EXISTS checks (
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),

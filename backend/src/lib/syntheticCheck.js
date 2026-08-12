@@ -1,4 +1,4 @@
-const STEP_TIMEOUT_MS = 15000;
+const DEFAULT_STEP_TIMEOUT_MS = 15000;
 
 // Substitutes {{varName}} in a string with a value captured by an
 // earlier step's `extract`. Left untouched if the variable was never
@@ -28,6 +28,10 @@ export async function runSyntheticCheck(monitor) {
   }
 
   const start = Date.now();
+  // Applied per step, same as it always was - a monitor with a longer
+  // check_timeout_sec (see db.js) gets that much per individual request
+  // in the sequence, not as a budget split across all of them.
+  const timeoutMs = (monitor.check_timeout_sec || DEFAULT_STEP_TIMEOUT_MS / 1000) * 1000;
   let cookies = {}; // name -> value, replayed as one Cookie header on every later step
   const vars = {};
   let lastStatusCode = null;
@@ -45,7 +49,7 @@ export async function runSyntheticCheck(monitor) {
     const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), STEP_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response;
     try {
       response = await fetch(url, {
@@ -58,7 +62,7 @@ export async function runSyntheticCheck(monitor) {
     } catch (err) {
       const responseMs = Date.now() - start;
       const detail =
-        err.name === "AbortError" ? `timed out after ${STEP_TIMEOUT_MS / 1000}s` : err.cause?.message ? `${err.message}: ${err.cause.message}` : err.message;
+        err.name === "AbortError" ? `timed out after ${timeoutMs / 1000}s` : err.cause?.message ? `${err.message}: ${err.cause.message}` : err.message;
       return { status: "down", statusCode: lastStatusCode, responseMs, errorMessage: `${stepLabel}: ${detail}`, contentHash: null };
     } finally {
       clearTimeout(timer);

@@ -62,7 +62,7 @@ router.post("/check-now", async (req, res) => {
 router.post("/", async (req, res) => {
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
-    group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps,
+    group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
   } = req.body;
   if (!name?.trim() || !url?.trim()) return res.status(400).json({ error: "name and url are required" });
   try {
@@ -73,14 +73,17 @@ router.post("/", async (req, res) => {
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
   }
+  if (check_timeout_sec !== undefined && check_timeout_sec !== null && (Number(check_timeout_sec) < 3 || Number(check_timeout_sec) > 60)) {
+    return res.status(400).json({ error: "check timeout must be between 3 and 60 seconds" });
+  }
   const type = normalizeMonitorType(monitor_type);
   const stepsError = validateSteps(type, synthetic_steps);
   if (stepsError) return res.status(400).json({ error: stepsError });
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
-         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
       [
         req.userId,
         name.trim(),
@@ -97,6 +100,7 @@ router.post("/", async (req, res) => {
         !!content_diff_enabled,
         type,
         type === "synthetic" ? JSON.stringify(synthetic_steps) : null,
+        Number(check_timeout_sec) || 15,
       ]
     );
     res.status(201).json(rows[0]);
@@ -109,10 +113,13 @@ router.post("/", async (req, res) => {
 router.patch("/:id", async (req, res) => {
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
-    active, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps,
+    active, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
   } = req.body;
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
+  }
+  if (check_timeout_sec !== undefined && check_timeout_sec !== null && (Number(check_timeout_sec) < 3 || Number(check_timeout_sec) > 60)) {
+    return res.status(400).json({ error: "check timeout must be between 3 and 60 seconds" });
   }
   if (monitor_type !== undefined) {
     const stepsError = validateSteps(normalizeMonitorType(monitor_type), synthetic_steps);
@@ -139,6 +146,7 @@ router.patch("/:id", async (req, res) => {
          content_diff_enabled = COALESCE($15, content_diff_enabled),
          monitor_type = COALESCE($16, monitor_type),
          synthetic_steps = CASE WHEN $17 THEN $18::jsonb ELSE synthetic_steps END,
+         check_timeout_sec = COALESCE($19, check_timeout_sec),
          updated_at = now()
        WHERE id = $1 AND user_id = $2 RETURNING *`,
       [
@@ -160,6 +168,7 @@ router.patch("/:id", async (req, res) => {
         nextType,
         willTouchSteps,
         nextSteps,
+        check_timeout_sec ? Number(check_timeout_sec) : null,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
