@@ -2,6 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { sendDigest } from "../lib/digest.js";
 
 const router = Router();
 
@@ -53,21 +54,35 @@ router.post("/logout", (req, res) => {
 });
 
 router.get("/me", requireAuth, async (req, res) => {
-  const { rows } = await pool.query(`SELECT id, email, alert_email, telegram_chat_id FROM users WHERE id = $1`, [req.userId]);
+  const { rows } = await pool.query(
+    `SELECT id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at FROM users WHERE id = $1`,
+    [req.userId]
+  );
   if (rows.length === 0) return res.status(404).json({ error: "not found" });
   res.json(rows[0]);
 });
 
 router.patch("/me", requireAuth, async (req, res) => {
-  const { alert_email, telegram_chat_id } = req.body;
+  const { alert_email, telegram_chat_id, digest_enabled } = req.body;
   const { rows } = await pool.query(
     `UPDATE users SET
        alert_email = COALESCE($2, alert_email),
-       telegram_chat_id = $3
-     WHERE id = $1 RETURNING id, email, alert_email, telegram_chat_id`,
-    [req.userId, alert_email?.trim() || null, telegram_chat_id?.trim() || null]
+       telegram_chat_id = $3,
+       digest_enabled = COALESCE($4, digest_enabled)
+     WHERE id = $1 RETURNING id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at`,
+    [req.userId, alert_email?.trim() || null, telegram_chat_id?.trim() || null, digest_enabled === undefined ? null : !!digest_enabled]
   );
   res.json(rows[0]);
+});
+
+// Sends the digest right now regardless of the weekly cadence clock -
+// doesn't touch digest_sent_at, same "test doesn't affect real state"
+// shape as the push/Telegram test buttons.
+router.post("/digest-test", requireAuth, async (req, res) => {
+  const { rows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [req.userId]);
+  const result = await sendDigest(rows[0]);
+  if (!result.sent) return res.status(400).json({ error: result.reason || "nothing to send" });
+  res.json(result);
 });
 
 export default router;

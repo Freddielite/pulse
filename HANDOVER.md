@@ -96,6 +96,26 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Weekly digest**, opt-in per user (`users.digest_enabled`, off by
+  default). Once turned on, `lib/digest.js`'s `runDigestSweep()` - called
+  from the cron tick alongside the cert/security sweeps - sends one
+  summary per user roughly every 7 days: uptime % and incident count per
+  active monitor over the last week, plus a cert/domain-expiring-within-
+  14-days note reusing the same threshold `alertExpiringSoon` already
+  uses, so nothing shows up in the digest that wouldn't also have paged
+  you separately. Goes out over whatever channels are already
+  configured - push, email, Telegram - same three sends every other
+  alert in `checkRunner.js` already does, just once a week instead of
+  on a state transition. `digest_sent_at` is the cadence clock: NULL is
+  immediately due, and it's a rolling 7-days-since-last-send rather than
+  a fixed day-of-week, so turning it on any day just means "every 7 days
+  from now" - no everyone-converges-on-Monday effect. The clock resets
+  even if a send fails (e.g. SMTP misconfigured), same reasoning as
+  everything else here that would rather go quiet than retry forever.
+  Settings has a new "Weekly digest" toggle plus a "Send test" button
+  (`POST /api/auth/digest-test`) that sends immediately without
+  touching `digest_sent_at`, same "test doesn't affect real state" shape
+  as the existing push/Telegram test buttons.
 - **Degraded state**, distinct from up/down. Opt-in per monitor
   (`degraded_threshold_ms`, NULL by default = off): a *passing* check
   slower than the threshold bumps a separate `consecutive_slow` counter,
@@ -341,9 +361,6 @@ that would need Pulse to hold write access to another repo/host - that
 was considered (auto-fix for security header findings, opening a PR to
 fix them) and deliberately not built for exactly that reason.
 
-- **Weekly digest email.** A once-a-week summary (uptime %, any
-  incidents, cert/domain expiry heads-up) instead of only ever hearing
-  from Pulse when something's actively broken.
 - **TCP/port checks, not just HTTP.** For anything that isn't a web
   endpoint (a database, a raw socket service) - a plain "can I open this
   port" check, same retry/threshold/alerting machinery as the HTTP

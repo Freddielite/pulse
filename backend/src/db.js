@@ -31,6 +31,18 @@ export async function migrate() {
     );
 
     ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;
+    -- Weekly digest email/push/Telegram summary (uptime %, incidents,
+    -- upcoming cert/domain expiry) - opt-in, off by default like every
+    -- other alert channel here. digest_sent_at is the cadence clock:
+    -- NULL means never sent, so it's immediately due once turned on
+    -- (same "due" pattern as cert_checked_at/security_scanned_at on
+    -- monitors), and runDigestSweep() only ever looks at whether 7 days
+    -- have passed since this, never a day-of-week schedule - so turning
+    -- it on any day of the week settles into "once every 7 days from
+    -- when you turned it on" rather than everyone converging on the
+    -- same Monday.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_sent_at TIMESTAMPTZ;
 
     -- express-session's connect-pg-simple store creates/manages this table
     -- itself on boot (see index.js), so it isn't defined here.

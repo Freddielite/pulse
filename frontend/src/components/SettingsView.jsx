@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { updateMe, testPush, testTelegram, getTelegramStatus, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
+import { updateMe, testPush, testTelegram, getTelegramStatus, sendDigestTest, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
 import { usePush } from "../hooks/usePush.js";
 
 export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }) {
@@ -7,6 +7,8 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   const [alertEmail, setAlertEmail] = useState(user.alert_email || "");
   const [savingEmail, setSavingEmail] = useState(false);
   const [telegramStatus, setTelegramStatus] = useState(null); // { configured, ready, source }
+  const [digestBusy, setDigestBusy] = useState(false);
+  const [digestTesting, setDigestTesting] = useState(false);
   const [tokens, setTokens] = useState([]);
   const [newTokenName, setNewTokenName] = useState("");
   const [creatingToken, setCreatingToken] = useState(false);
@@ -71,6 +73,31 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
       toast("Test message sent.");
     } catch (err) {
       toast(err.message, "error");
+    }
+  }
+
+  async function handleDigestToggle() {
+    setDigestBusy(true);
+    try {
+      const updated = await updateMe({ digest_enabled: !user.digest_enabled });
+      onUserUpdated(updated);
+      toast(updated.digest_enabled ? "Weekly digest turned on." : "Weekly digest turned off.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setDigestBusy(false);
+    }
+  }
+
+  async function handleDigestTest() {
+    setDigestTesting(true);
+    try {
+      await sendDigestTest();
+      toast("Test digest sent.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setDigestTesting(false);
     }
   }
 
@@ -148,6 +175,38 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
           </div>
           <button className="pl-btn pl-btn--sm" type="submit" disabled={savingEmail}>{savingEmail ? "Saving..." : "Save"}</button>
         </form>
+      </div>
+
+      <div className="pl-section-label">Weekly digest</div>
+      <div className="pl-panel">
+        <div className="pl-settings-row">
+          <div>
+            <div className="pl-settings-row__title">Weekly summary</div>
+            <div className="pl-settings-row__desc">
+              Once a week: uptime %, incident count, and any cert/domain expiring within 14 days, across every
+              active monitor - sent over whichever alert channels you already have configured (push, email,
+              Telegram). Doesn't replace real-time down alerts, just a heads-up if all you've heard from Pulse
+              lately is silence.
+              {user.digest_enabled && (
+                <>
+                  {" "}
+                  {user.digest_sent_at ? `Last sent ${new Date(user.digest_sent_at).toLocaleDateString()}.` : "Not sent yet - due on the next cron tick."}
+                </>
+              )}
+            </div>
+          </div>
+          <button className={`pl-toggle ${user.digest_enabled ? "on" : ""}`} onClick={handleDigestToggle} disabled={digestBusy}>
+            <span className="pl-toggle__knob" />
+          </button>
+        </div>
+        {user.digest_enabled && (
+          <div className="pl-settings-row">
+            <div className="pl-settings-row__desc">Send a test digest now</div>
+            <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleDigestTest} disabled={digestTesting}>
+              {digestTesting ? "Sending..." : "Send test"}
+            </button>
+          </div>
+        )}
       </div>
 
       {telegramStatus?.configured && (

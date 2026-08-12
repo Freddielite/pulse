@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db.js";
 import { runUptimeChecks, runCertSweep, runSecuritySweep } from "../lib/checkRunner.js";
+import { runDigestSweep } from "../lib/digest.js";
 
 const router = Router();
 
@@ -35,8 +36,13 @@ router.all("/tick", requireCronSecret, async (req, res) => {
   // sweep right below it.
   const certChecks = await runCertSweep();
   const securityScans = await runSecuritySweep();
+  // Same unscoped-across-everyone shape as the sweeps above - weekly
+  // cadence means this is a no-op most ticks (nobody's clock is due),
+  // so it costs nothing to check on every tick rather than needing its
+  // own separate schedule.
+  const digestsSent = await runDigestSweep();
 
-  res.json({ ...uptimeResults, certChecks, securityScans });
+  res.json({ ...uptimeResults, certChecks, securityScans, digestsSent });
 });
 
 export default router;

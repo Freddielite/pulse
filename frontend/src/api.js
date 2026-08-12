@@ -62,6 +62,8 @@ export const testPush = () => apiFetch("/push/test", { method: "POST" });
 export const getTelegramStatus = () => apiFetch("/telegram/status");
 export const testTelegram = () => apiFetch("/telegram/test", { method: "POST" });
 
+export const sendDigestTest = () => apiFetch("/auth/digest-test", { method: "POST" });
+
 export const listApiTokens = () => apiFetch("/tokens");
 export const createApiToken = (name) => apiFetch("/tokens", { method: "POST", body: JSON.stringify({ name }) });
 export const deleteApiToken = (id) => apiFetch(`/tokens/${id}`, { method: "DELETE" });
