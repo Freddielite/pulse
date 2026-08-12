@@ -374,6 +374,24 @@ a {
   border-color: var(--signal);
 }
 
+/* The rule above is a descendant selector, so it was also catching any
+   checkbox/radio nested inside a .pl-field (e.g. the monitor checklist
+   in StatusPageForm) - width: 100% and 10px/12px padding turned each
+   checkbox into a large invisible stretched box with the native tick
+   rendered off in a corner of it, shoving its label far to the right
+   instead of sitting right next to it. Reset those two input types back
+   to their normal small inline size rather than the text-field styling
+   above. */
+.pl-field input[type="checkbox"],
+.pl-field input[type="radio"] {
+  width: auto;
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  accent-color: var(--signal);
+}
+
 .pl-field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

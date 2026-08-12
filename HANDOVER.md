@@ -96,6 +96,17 @@ curls the same URL works identically.
 
 ## Recent changes
 
+- **Fixed the monitor checklist in "New status page."** `.pl-field
+  input` is a descendant selector meant for the one direct text-input
+  child a `.pl-field` normally has - it was also reaching the checkboxes
+  nested two levels down in the monitor checklist (`.pl-field` >
+  scroll box > `<label>` > `<input type="checkbox">`), stretching each
+  one to `width: 100%` with 10px/12px padding meant for a text field.
+  That's what put visible daylight between each checkbox and its label
+  instead of them sitting flush together. Added a `.pl-field
+  input[type="checkbox"]` (and `[type="radio"]`, same problem waiting
+  to happen) override right after it that resets width/padding/
+  background/border back to a normal inline checkbox.
 - **Mobile layout fixes on the Status pages tab.** Two real bugs, not
   just tightening: (1) `StatusPagesView.jsx`'s header row (the
   explanatory text + "New status page" button) used a raw inline flex
