@@ -2,17 +2,47 @@ import crypto from "node:crypto";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 15000;
 const RETRY_DELAY_MS = 4000;
+export const CONTENT_HASH_VERSION = 2;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Strips a raw HTML response down to just its visible text before
+// hashing for content-diff monitoring. A raw-body hash (v1) changes on
+// every check for most real frontends even when nothing a visitor would
+// notice actually changed - a Vite/webpack build-hashed asset filename,
+// an inline CSRF token, a request-id meta tag, a "generated at" comment.
+// None of that is content; hashing only the visible text ignores it, so
+// the alert fires for actual copy/layout changes instead of every
+// deploy or every request. Deliberately regex-based rather than pulling
+// in an HTML parser - this only needs to be good enough to strip tags
+// and boilerplate, not to handle malformed markup correctly, and it
+// keeps the free-tier backend's dependency list and memory footprint
+// small (same reasoning as skipping a headless browser in
+// syntheticCheck.js).
+function extractVisibleText(html) {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // One outcome shape for every caller: never throws, always resolves with
 // { status, statusCode, responseMs, errorMessage, contentHash }, so the
 // tick loop can treat a network failure and a wrong status code the same
 // way. contentHash is only ever non-null when the check passed and the
-// monitor has content-diff monitoring on - see checkRunner.js for what it
-// does with it.
+// monitor has content-diff monitoring on, and is always computed with
+// the current CONTENT_HASH_VERSION scheme (extractVisibleText below) -
+// see checkRunner.js for what it does with it.
 async function runSingleAttempt(monitor) {
   // check_timeout_sec is per-monitor (see db.js) - falls back to the old
   // fixed default for any row from before that column existed, or if it's
@@ -52,7 +82,7 @@ async function runSingleAttempt(monitor) {
           errorMessage = `Response did not contain expected text: "${monitor.body_contains}"`;
         }
         if (up && monitor.content_diff_enabled) {
-          contentHash = crypto.createHash("sha256").update(bodyText).digest("hex");
+          contentHash = crypto.createHash("sha256").update(extractVisibleText(bodyText)).digest("hex");
         }
       } catch (bodyErr) {
         up = false;

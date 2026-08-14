@@ -1,5 +1,5 @@
 import { pool } from "../db.js";
-import { runHttpCheck } from "./httpCheck.js";
+import { runHttpCheck, CONTENT_HASH_VERSION } from "./httpCheck.js";
 import { runSyntheticCheck } from "./syntheticCheck.js";
 import { runTcpCheck } from "./tcpCheck.js";
 import { getSslExpiry, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
@@ -174,8 +174,18 @@ async function checkOneMonitor(monitor) {
     // turned on, so it just becomes the baseline silently - there's
     // nothing to have "changed" relative to yet.
     if (monitor.content_diff_enabled && result.contentHash) {
-      if (!monitor.content_hash) {
-        await pool.query(`UPDATE monitors SET content_hash = $2 WHERE id = $1`, [monitor.id, result.contentHash]);
+      if (!monitor.content_hash || monitor.content_hash_version !== CONTENT_HASH_VERSION) {
+        // No baseline yet, or the baseline was computed with an older
+        // hashing scheme (see CONTENT_HASH_VERSION / extractVisibleText
+        // in httpCheck.js). Either way there's nothing meaningful to
+        // compare the new hash against, so it just becomes the new
+        // baseline silently - a scheme upgrade shouldn't cost the user
+        // a false "content changed" alert for a page that never
+        // actually changed.
+        await pool.query(
+          `UPDATE monitors SET content_hash = $2, content_hash_version = $3 WHERE id = $1`,
+          [monitor.id, result.contentHash, CONTENT_HASH_VERSION]
+        );
       } else if (monitor.content_hash !== result.contentHash) {
         // The new hash becomes the baseline immediately, not after some
         // separate "acknowledge" step - so a legitimate deploy earns

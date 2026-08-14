@@ -146,6 +146,15 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_diff_enabled BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_hash TEXT;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_changed_at TIMESTAMPTZ;
+    -- Which hashing scheme content_hash was computed with. v1 = raw
+    -- response body (the original scheme - noisy on real frontends,
+    -- since a build-hashed asset filename or a CSRF token changes the
+    -- whole-body hash same as an actual content edit). v2 = normalized
+    -- visible text, see extractVisibleText() in httpCheck.js. A monitor
+    -- sitting on v1 gets silently re-baselined onto v2 on its next check
+    -- (see checkRunner.js) rather than firing a false "changed" alert
+    -- for what's really just a hashing-scheme change, not a page change.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS content_hash_version INTEGER NOT NULL DEFAULT 1;
     -- Read-only share links, one per monitor. NULL means sharing is off.
     -- A non-NULL value is an unguessable lookup key (18 random bytes),
     -- not a hashed secret like api_tokens.token_hash - anyone holding the
