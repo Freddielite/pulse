@@ -1,7 +1,7 @@
 // Bump this when offline.html or its assets change, so old clients
 // pick up the new cached copy instead of serving a stale offline page
 // forever.
-const OFFLINE_CACHE = "pulse-offline-v3";
+const OFFLINE_CACHE = "pulse-offline-v4";
 const OFFLINE_URL = "/offline.html";
 
 self.addEventListener("install", (event) => {
