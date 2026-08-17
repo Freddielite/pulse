@@ -65,6 +65,9 @@ body,
   -moz-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+  /* Belt-and-braces for the viewport meta tag: stops double-tap-to-zoom
+     on browsers that don't fully honor user-scalable=no on its own. */
+  touch-action: manipulation;
 }
 
 input,

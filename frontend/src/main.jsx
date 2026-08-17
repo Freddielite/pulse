@@ -41,3 +41,17 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     )}
   </React.StrictMode>
 );
+
+// Splash screen lives in index.html so it's visible before this file
+// even finishes loading. Once React has painted the real UI, fade it
+// out and drop it from the DOM. Double rAF: one to let React commit,
+// one to let the browser actually paint that commit, so the fade
+// never starts a frame early and flashes unstyled content.
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    const splash = document.getElementById("pl-splash");
+    if (!splash) return;
+    splash.classList.add("pl-splash-hidden");
+    splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+  });
+});

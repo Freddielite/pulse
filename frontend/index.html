@@ -2,20 +2,64 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
     <meta name="theme-color" content="#0a0f0d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Pulse</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <style>
+      /* Splash screen: shown instantly on load (no JS/React needed yet),
+         removed once main.jsx signals the app has mounted. Sits above
+         everything, matches the manifest's background/theme color and
+         the app icon, so there's no flash of blank white before it or
+         mismatched color after it. */
+      #pl-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0a0f0d;
+        transition: opacity 0.25s ease;
+      }
+      #pl-splash img {
+        width: 84px;
+        height: 84px;
+        animation: pl-splash-pulse 1.4s ease-in-out infinite;
+      }
+      @keyframes pl-splash-pulse {
+        0%,
+        100% {
+          transform: scale(1);
+          opacity: 1;
+        }
+        50% {
+          transform: scale(1.08);
+          opacity: 0.85;
+        }
+      }
+      #pl-splash.pl-splash-hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="pl-splash"><img src="/icon.svg" alt="" /></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
