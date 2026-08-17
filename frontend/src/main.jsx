@@ -23,6 +23,21 @@ window.addEventListener(
   { passive: false }
 );
 
+// Registered unconditionally at boot (not just when someone opens
+// Settings and usePush.js runs) so the offline fallback page in sw.js
+// gets cached on the very first visit, for everyone - not only people
+// who've turned push notifications on. register() is safe to call
+// again later from usePush.js; the browser just returns the existing
+// registration.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Offline fallback just won't be available this session (e.g.
+      // private browsing) - not worth surfacing to the user.
+    });
+  });
+}
+
 // A share link is #/share/<token>, a combined status page link is
 // #/status/<token> - both checked here, before App (and its
 // getMe()/session check) ever mounts, so opening either never triggers
