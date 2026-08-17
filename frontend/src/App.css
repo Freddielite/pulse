@@ -112,10 +112,11 @@ a {
 
 /* When the bottom tab bar is present (mobile), the shell needs extra
    clearance so the last bit of scrollable content isn't hidden behind
-   it - the tab bar's own height plus whatever the home-indicator
-   safe area adds on top. */
+   it - the tab bar's own rendered height (icon + label + its internal
+   padding, roughly 60-85px depending on device) plus genuine breathing
+   room above it, not just enough to technically clear it. */
 .pl-shell--with-tabbar {
-  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  padding-bottom: calc(112px + env(safe-area-inset-bottom));
 }
 
 .pl-header {

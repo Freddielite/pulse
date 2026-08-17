@@ -173,7 +173,24 @@ export default function StatusPagesView({ monitors, existingGroups = [], toast }
     }
   }
 
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div>
+        <div className="pl-dashboard-toolbar" style={{ marginBottom: 14 }}>
+          <div className="pl-skeleton" style={{ width: 220, height: 13 }} />
+          <div className="pl-skeleton" style={{ width: 120, height: 30 }} />
+        </div>
+        <div className="pl-panel" style={{ marginBottom: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="pl-skeleton" style={{ width: "40%", height: 14 }} />
+          <div className="pl-skeleton" style={{ width: "70%", height: 12 }} />
+        </div>
+        <div className="pl-panel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="pl-skeleton" style={{ width: "35%", height: 14 }} />
+          <div className="pl-skeleton" style={{ width: "60%", height: 12 }} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
