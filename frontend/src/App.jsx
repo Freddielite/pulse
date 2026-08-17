@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getMe, listMonitors } from "./api.js";
 import { useToast } from "./hooks/useToast.js";
+import { useIsMobile } from "./hooks/useIsMobile.js";
 import AuthRoot from "./AuthRoot.jsx";
 import PulseLine from "./components/PulseLine.jsx";
 import Dashboard from "./components/Dashboard.jsx";
@@ -9,13 +10,50 @@ import MonitorForm from "./components/MonitorForm.jsx";
 import SettingsView from "./components/SettingsView.jsx";
 import StatusPagesView from "./components/StatusPagesView.jsx";
 
+// Bottom tab bar icons, hand-drawn rather than pulling in an icon
+// library for three glyphs. Monitors reuses the app's own pulse-line
+// motif instead of a generic grid/list icon, so the tab bar echoes
+// the brand mark rather than looking like a stock template.
+const ICONS = {
+  monitors: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12h4l2-7 4 14 3-10 2 3h3" />
+    </svg>
+  ),
+  statusPages: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="3" y1="9" x2="21" y2="9" />
+      <line x1="7" y1="14" x2="17" y2="14" />
+      <line x1="7" y1="17" x2="13" y2="17" />
+    </svg>
+  ),
+  settings: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <circle cx="15" cy="6" r="2" fill="currentColor" stroke="none" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <circle cx="9" cy="12" r="2" fill="currentColor" stroke="none" />
+      <line x1="4" y1="18" x2="20" y2="18" />
+      <circle cx="17" cy="18" r="2" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+};
+
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = still checking, null = logged out
   const [monitors, setMonitors] = useState([]);
+  const [monitorsLoading, setMonitorsLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [adding, setAdding] = useState(false);
+  // Tracks *why* the view just changed, so the page transition below
+  // can play a direction that actually matches what happened: pushing
+  // into a monitor's detail, popping back out of it, or switching a
+  // top-level tab (which isn't really a "direction" at all).
+  const [navAction, setNavAction] = useState("tab");
   const { toasts, push: toast } = useToast();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     getMe().then(setUser).catch(() => setUser(null));
@@ -26,6 +64,8 @@ export default function App() {
       setMonitors(await listMonitors());
     } catch (err) {
       toast(err.message, "error");
+    } finally {
+      setMonitorsLoading(false);
     }
   }
 
@@ -47,8 +87,26 @@ export default function App() {
   const selected = monitors.find((m) => m.id === selectedId);
   const existingGroups = [...new Set(monitors.map((m) => m.group_name).filter(Boolean))].sort();
 
+  function goToTab(t) {
+    setNavAction("tab");
+    setTab(t);
+    setSelectedId(null);
+  }
+
+  function openMonitor(m) {
+    setNavAction("push");
+    setSelectedId(m.id);
+  }
+
+  function closeMonitor() {
+    setNavAction("pop");
+    setSelectedId(null);
+  }
+
+  const pageKey = `${tab}:${selected ? "detail" : "list"}`;
+
   return (
-    <div className="pl-shell">
+    <div className={`pl-shell${isMobile ? " pl-shell--with-tabbar" : ""}`}>
       <div className="pl-header">
         <div className="pl-brand">
           <svg className="pl-brand__mark" viewBox="0 0 100 100">
@@ -58,28 +116,30 @@ export default function App() {
           Pulse
         </div>
         <div className="pl-nav">
-          <button className={tab === "dashboard" ? "active" : ""} onClick={() => { setTab("dashboard"); setSelectedId(null); }}>Monitors</button>
-          <button className={tab === "status-pages" ? "active" : ""} onClick={() => { setTab("status-pages"); setSelectedId(null); }}>Status pages</button>
-          <button className={tab === "settings" ? "active" : ""} onClick={() => { setTab("settings"); setSelectedId(null); }}>Settings</button>
+          <button className={tab === "dashboard" ? "active" : ""} onClick={() => goToTab("dashboard")}>Monitors</button>
+          <button className={tab === "status-pages" ? "active" : ""} onClick={() => goToTab("status-pages")}>Status pages</button>
+          <button className={tab === "settings" ? "active" : ""} onClick={() => goToTab("settings")}>Settings</button>
         </div>
       </div>
       <PulseLine />
 
-      {tab === "dashboard" && !selected && (
-        <Dashboard monitors={monitors} onSelect={(m) => setSelectedId(m.id)} onAdd={() => setAdding(true)} onChanged={loadMonitors} toast={toast} />
-      )}
+      <div key={pageKey} className={`pl-page pl-page--${navAction}`}>
+        {tab === "dashboard" && !selected && (
+          <Dashboard monitors={monitors} loading={monitorsLoading} onSelect={openMonitor} onAdd={() => setAdding(true)} onChanged={loadMonitors} toast={toast} />
+        )}
 
-      {tab === "dashboard" && selected && (
-        <MonitorDetail monitor={selected} existingGroups={existingGroups} onBack={() => setSelectedId(null)} onChanged={loadMonitors} toast={toast} />
-      )}
+        {tab === "dashboard" && selected && (
+          <MonitorDetail monitor={selected} existingGroups={existingGroups} onBack={closeMonitor} onChanged={loadMonitors} toast={toast} />
+        )}
 
-      {tab === "status-pages" && (
-        <StatusPagesView monitors={monitors} existingGroups={existingGroups} toast={toast} />
-      )}
+        {tab === "status-pages" && (
+          <StatusPagesView monitors={monitors} existingGroups={existingGroups} toast={toast} />
+        )}
 
-      {tab === "settings" && (
-        <SettingsView user={user} onUserUpdated={setUser} onLoggedOut={() => setUser(null)} toast={toast} />
-      )}
+        {tab === "settings" && (
+          <SettingsView user={user} onUserUpdated={setUser} onLoggedOut={() => setUser(null)} toast={toast} />
+        )}
+      </div>
 
       {adding && (
         <MonitorForm
@@ -91,6 +151,23 @@ export default function App() {
           }}
           toast={toast}
         />
+      )}
+
+      {isMobile && (
+        <nav className="pl-tabbar">
+          <button className={tab === "dashboard" ? "active" : ""} onClick={() => goToTab("dashboard")}>
+            {ICONS.monitors}
+            Monitors
+          </button>
+          <button className={tab === "status-pages" ? "active" : ""} onClick={() => goToTab("status-pages")}>
+            {ICONS.statusPages}
+            Status
+          </button>
+          <button className={tab === "settings" ? "active" : ""} onClick={() => goToTab("settings")}>
+            {ICONS.settings}
+            Settings
+          </button>
+        </nav>
       )}
 
       <div className="pl-toast-stack">

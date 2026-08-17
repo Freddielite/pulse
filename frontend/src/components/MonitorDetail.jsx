@@ -248,7 +248,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
         )}
       </div>
 
-      {uptime && (
+      {uptime ? (
         <div className="pl-uptime-grid">
           <div className="pl-panel pl-uptime-cell">
             <div className="pl-uptime-cell__value">{uptime["24h"].uptime_pct != null ? `${uptime["24h"].uptime_pct}%` : "N/A"}</div>
@@ -261,6 +261,18 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
           <div className="pl-panel pl-uptime-cell">
             <div className="pl-uptime-cell__value">{uptime["30d"].uptime_pct != null ? `${uptime["30d"].uptime_pct}%` : "N/A"}</div>
             <div className="pl-uptime-cell__label">30 days</div>
+          </div>
+        </div>
+      ) : (
+        <div className="pl-uptime-grid">
+          <div className="pl-panel pl-uptime-cell">
+            <div className="pl-skeleton" style={{ width: "60%", height: 21, margin: "0 auto" }} />
+          </div>
+          <div className="pl-panel pl-uptime-cell">
+            <div className="pl-skeleton" style={{ width: "60%", height: 21, margin: "0 auto" }} />
+          </div>
+          <div className="pl-panel pl-uptime-cell">
+            <div className="pl-skeleton" style={{ width: "60%", height: 21, margin: "0 auto" }} />
           </div>
         </div>
       )}

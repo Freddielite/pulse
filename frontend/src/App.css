@@ -42,6 +42,10 @@ body,
 html,
 body {
   overflow-x: hidden;
+  /* Kills the iOS/Android rubber-band bounce at the top/bottom of the
+     page - one of the more obvious "this is a website" tells on
+     mobile. Native apps don't rubber-band the whole screen. */
+  overscroll-behavior-y: contain;
 }
 
 body {
@@ -101,6 +105,17 @@ a {
   max-width: 920px;
   margin: 0 auto;
   padding: 28px 20px 80px;
+  padding-top: max(28px, env(safe-area-inset-top));
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+}
+
+/* When the bottom tab bar is present (mobile), the shell needs extra
+   clearance so the last bit of scrollable content isn't hidden behind
+   it - the tab bar's own height plus whatever the home-indicator
+   safe area adds on top. */
+.pl-shell--with-tabbar {
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
 }
 
 .pl-header {
@@ -152,6 +167,170 @@ a {
 .pl-nav button.active {
   color: var(--signal);
   background: var(--signal-dim);
+}
+
+/* ---------- Bottom tab bar (mobile) ---------- */
+
+.pl-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: space-around;
+  background: rgba(14, 21, 18, 0.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-top: 1px solid var(--panel-border);
+  padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+}
+
+.pl-tabbar button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 4px 4px 2px;
+  cursor: pointer;
+  transition: color 0.15s ease, transform 0.12s ease;
+}
+
+.pl-tabbar button svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+}
+
+.pl-tabbar button.active {
+  color: var(--signal);
+}
+
+/* Physical, native-feeling press: the icon+label compress slightly on
+   tap rather than nothing visibly happening until the view changes. */
+.pl-tabbar button:active {
+  transform: scale(0.92);
+}
+
+/* ---------- Page transitions ---------- */
+
+.pl-page {
+  animation-duration: 0.32s;
+  animation-timing-function: cubic-bezier(0.22, 0.8, 0.28, 1);
+  animation-fill-mode: both;
+}
+
+/* Selecting a monitor - pushing a level deeper, like a native
+   navigation stack. */
+.pl-page--push {
+  animation-name: pl-slide-in-right;
+}
+
+/* Backing out of a monitor's detail view - the reverse of push. */
+.pl-page--pop {
+  animation-name: pl-slide-in-left;
+}
+
+/* Switching top-level tabs (Monitors / Status pages / Settings) isn't
+   a stack push/pop, so it gets its own, more neutral motion instead
+   of implying a direction that isn't really there. */
+.pl-page--tab {
+  animation-name: pl-fade-up;
+}
+
+@keyframes pl-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes pl-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes pl-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-page {
+    animation: none !important;
+  }
+}
+
+/* ---------- Skeleton loaders ---------- */
+
+.pl-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--panel);
+  border-radius: 6px;
+}
+
+.pl-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: pl-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes pl-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.pl-skeleton-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.pl-skeleton-card__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pl-skeleton-card__lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-skeleton::after {
+    animation: none !important;
+  }
 }
 
 /* Signature element: a heartbeat / pulse waveform, used sparingly as a
@@ -997,5 +1176,15 @@ a {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
+  }
+}
+
+/* Below the same breakpoint used everywhere else for "mobile," the
+   header's inline nav hands off to the fixed bottom tab bar instead -
+   having both would be redundant and the header nav cramps badly at
+   this width anyway. */
+@media (max-width: 560px) {
+  .pl-header .pl-nav {
+    display: none;
   }
 }

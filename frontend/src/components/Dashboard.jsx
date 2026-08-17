@@ -1,5 +1,6 @@
 import { useState } from "react";
 import MonitorCard from "./MonitorCard.jsx";
+import MonitorCardSkeleton from "./MonitorCardSkeleton.jsx";
 import { checkNow, snoozeAllMonitors, unsnoozeAllMonitors } from "../api.js";
 
 const SNOOZE_OPTIONS = [
@@ -9,7 +10,7 @@ const SNOOZE_OPTIONS = [
   { label: "24h", minutes: 1440 },
 ];
 
-export default function Dashboard({ monitors, onSelect, onAdd, onChanged, toast }) {
+export default function Dashboard({ monitors, loading, onSelect, onAdd, onChanged, toast }) {
   const [checking, setChecking] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
   const upCount = monitors.filter((m) => m.current_status === "up").length;
@@ -59,18 +60,28 @@ export default function Dashboard({ monitors, onSelect, onAdd, onChanged, toast 
     <div>
       <div className="pl-panel pl-dashboard-toolbar">
         <div className="pl-dashboard-stats">
-          <div>
-            <div className="pl-stat__value" style={{ fontSize: 20 }}>{monitors.length}</div>
-            <div className="pl-stat__label">Monitoring</div>
-          </div>
-          <div>
-            <div className="pl-stat__value" style={{ fontSize: 20, color: downCount > 0 ? "var(--alert)" : "inherit" }}>{downCount}</div>
-            <div className="pl-stat__label">Down now</div>
-          </div>
-          <div>
-            <div className="pl-stat__value" style={{ fontSize: 20, color: "var(--signal)" }}>{upCount}</div>
-            <div className="pl-stat__label">Up now</div>
-          </div>
+          {loading ? (
+            <>
+              <div className="pl-skeleton" style={{ width: 60, height: 34 }} />
+              <div className="pl-skeleton" style={{ width: 60, height: 34 }} />
+              <div className="pl-skeleton" style={{ width: 60, height: 34 }} />
+            </>
+          ) : (
+            <>
+              <div>
+                <div className="pl-stat__value" style={{ fontSize: 20 }}>{monitors.length}</div>
+                <div className="pl-stat__label">Monitoring</div>
+              </div>
+              <div>
+                <div className="pl-stat__value" style={{ fontSize: 20, color: downCount > 0 ? "var(--alert)" : "inherit" }}>{downCount}</div>
+                <div className="pl-stat__label">Down now</div>
+              </div>
+              <div>
+                <div className="pl-stat__value" style={{ fontSize: 20, color: "var(--signal)" }}>{upCount}</div>
+                <div className="pl-stat__label">Up now</div>
+              </div>
+            </>
+          )}
         </div>
         <div className="pl-dashboard-actions">
           <button className="pl-btn pl-btn--ghost" onClick={handleCheckNow} disabled={checking || monitors.length === 0}>
@@ -103,10 +114,18 @@ export default function Dashboard({ monitors, onSelect, onAdd, onChanged, toast 
       )}
 
       {monitors.length === 0 ? (
-        <div className="pl-panel pl-empty">
-          <div className="pl-empty__title">Nothing being watched yet</div>
-          <div>Add the first app or API you want kept alive and alerted on.</div>
-        </div>
+        loading ? (
+          <div className="pl-monitor-grid">
+            <MonitorCardSkeleton />
+            <MonitorCardSkeleton />
+            <MonitorCardSkeleton />
+          </div>
+        ) : (
+          <div className="pl-panel pl-empty">
+            <div className="pl-empty__title">Nothing being watched yet</div>
+            <div>Add the first app or API you want kept alive and alerted on.</div>
+          </div>
+        )
       ) : (
         <GroupedMonitorList monitors={monitors} onSelect={onSelect} />
       )}
