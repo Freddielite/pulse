@@ -44,14 +44,27 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
 // Splash screen lives in index.html so it's visible before this file
 // even finishes loading. Once React has painted the real UI, fade it
-// out and drop it from the DOM. Double rAF: one to let React commit,
-// one to let the browser actually paint that commit, so the fade
-// never starts a frame early and flashes unstyled content.
+// out and drop it from the DOM.
+//
+// Two things are being balanced here: React might mount almost
+// instantly (nothing to fade from truncated-looking), or slowly on a
+// bad connection. So this waits for BOTH React to have committed AND
+// paint AND a minimum time for the trace/settle/glow sequence in
+// index.html to actually finish playing (~1.7s) - whichever finishes
+// last - so the cinematic animation is never cut short, but a slow
+// load also never gets held hostage past when the app is ready.
+const MIN_SPLASH_MS = 1700;
+const splashStart = window.__plSplashStart || performance.now();
+
 requestAnimationFrame(() => {
   requestAnimationFrame(() => {
-    const splash = document.getElementById("pl-splash");
-    if (!splash) return;
-    splash.classList.add("pl-splash-hidden");
-    splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+    const elapsed = performance.now() - splashStart;
+    const remaining = Math.max(0, MIN_SPLASH_MS - elapsed);
+    setTimeout(() => {
+      const splash = document.getElementById("pl-splash");
+      if (!splash) return;
+      splash.classList.add("pl-splash-hidden");
+      splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+    }, remaining);
   });
 });
