@@ -34,18 +34,16 @@
         height: 64px;
         margin: 0 auto 28px;
       }
-      .icon path,
-      .icon circle {
-        stroke: #3ddc84;
-      }
       .icon path {
         fill: none;
-        stroke-width: 4;
+        /* Dimmed rather than bright signal-green: this is Pulse's own
+           mark, but shown "flatlined" - visually saying no signal,
+           not "everything's alive," which the bright green everywhere
+           else in the app means. */
+        stroke: #4d5f59;
+        stroke-width: 7;
         stroke-linecap: round;
-      }
-      .icon circle {
-        fill: #3ddc84;
-        stroke: none;
+        stroke-linejoin: round;
       }
       h1 {
         font-family: "Space Grotesk", -apple-system, sans-serif;
@@ -84,12 +82,8 @@
   </head>
   <body>
     <div class="wrap">
-      <svg class="icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-        <path d="M8 20 V12 A4 4 0 0 1 12 8 H20" fill="none" stroke-width="4" stroke-linecap="round" />
-        <path d="M44 8 H52 A4 4 0 0 1 56 12 V20" fill="none" stroke-width="4" stroke-linecap="round" />
-        <path d="M56 44 V52 A4 4 0 0 1 52 56 H44" fill="none" stroke-width="4" stroke-linecap="round" />
-        <path d="M20 56 H12 A4 4 0 0 1 8 52 V44" fill="none" stroke-width="4" stroke-linecap="round" />
-        <circle cx="32" cy="32" r="4" />
+      <svg class="icon" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <path d="M8 50 H32 L40 28 L54 72 L64 50 H92" />
       </svg>
       <h1>You're offline</h1>
       <p>Pulse can't reach the network right now. Check your connection and try again.</p>
