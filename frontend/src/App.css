@@ -52,6 +52,31 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Native-app feel on mobile: block long-press text selection / copy
+   everywhere by default, the way a real installed app behaves, and
+   only re-enable it inside actual inputs/textareas where people
+   legitimately need to select and copy what they typed. Also kill the
+   iOS "callout" (the popup with Copy/Look Up/Share on long-press) on
+   everything else, since disabling selection alone doesn't stop it. */
+html,
+body,
+#root {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+.pl-selectable {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 button,
 input,
 select {
