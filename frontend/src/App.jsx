@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getMe, listMonitors } from "./api.js";
+import { getMe, listMonitors, listStatusPages } from "./api.js";
 import { useToast } from "./hooks/useToast.js";
 import { useIsMobile } from "./hooks/useIsMobile.js";
 import AuthRoot from "./AuthRoot.jsx";
@@ -44,6 +44,8 @@ export default function App() {
   const [user, setUser] = useState(undefined); // undefined = still checking, null = logged out
   const [monitors, setMonitors] = useState([]);
   const [monitorsLoading, setMonitorsLoading] = useState(true);
+  const [statusPages, setStatusPages] = useState([]);
+  const [statusPagesLoading, setStatusPagesLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [adding, setAdding] = useState(false);
@@ -69,9 +71,25 @@ export default function App() {
     }
   }
 
+  // Held here (not inside StatusPagesView) specifically so switching
+  // to that tab doesn't refetch and re-show a loading state every
+  // single time - same reasoning as monitors living up here. Fetched
+  // once on login; StatusPagesView asks for a refresh explicitly via
+  // onReload after it actually changes something.
+  async function loadStatusPages() {
+    try {
+      setStatusPages(await listStatusPages());
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setStatusPagesLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (user) {
       loadMonitors();
+      loadStatusPages();
       // Poll for status changes so the dashboard reflects new checks
       // without a manual refresh - the tick interval on the backend is
       // typically a few minutes, so this doesn't need to be aggressive.
@@ -80,6 +98,22 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  // App icon badge: mirrors the "down now" count from the dashboard
+  // onto the home-screen icon itself, so a problem is visible without
+  // even opening the app. Feature-detected because the Badging API
+  // isn't universal (notably: not on desktop Firefox), and wrapped in
+  // try/catch since some browsers throw rather than reject.
+  useEffect(() => {
+    if (!("setAppBadge" in navigator)) return;
+    const downCount = monitors.filter((m) => m.current_status === "down").length;
+    try {
+      if (downCount > 0) navigator.setAppBadge(downCount);
+      else navigator.clearAppBadge();
+    } catch {
+      // Badging just won't reflect this update - not worth surfacing.
+    }
+  }, [monitors]);
 
   if (user === undefined) return null;
   if (!user) return <AuthRoot onAuthed={setUser} />;
@@ -133,11 +167,28 @@ export default function App() {
         )}
 
         {tab === "status-pages" && (
-          <StatusPagesView monitors={monitors} existingGroups={existingGroups} toast={toast} />
+          <StatusPagesView
+            monitors={monitors}
+            existingGroups={existingGroups}
+            pages={statusPages}
+            loading={statusPagesLoading}
+            onReload={loadStatusPages}
+            toast={toast}
+          />
         )}
 
         {tab === "settings" && (
-          <SettingsView user={user} onUserUpdated={setUser} onLoggedOut={() => setUser(null)} toast={toast} />
+          <SettingsView
+            user={user}
+            onUserUpdated={setUser}
+            onLoggedOut={() => {
+              if ("clearAppBadge" in navigator) {
+                navigator.clearAppBadge().catch(() => {});
+              }
+              setUser(null);
+            }}
+            toast={toast}
+          />
         )}
       </div>
 

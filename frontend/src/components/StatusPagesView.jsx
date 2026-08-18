@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { listStatusPages, createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusPage } from "../api.js";
+import { useState } from "react";
+import { createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusPage } from "../api.js";
 import Dropdown from "./Dropdown.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 
@@ -113,28 +113,11 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
   );
 }
 
-export default function StatusPagesView({ monitors, existingGroups = [], toast }) {
-  const [pages, setPages] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function StatusPagesView({ monitors, existingGroups = [], pages, loading, onReload, toast }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingPage, setEditingPage] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
-
-  async function load() {
-    try {
-      setPages(await listStatusPages());
-    } catch (err) {
-      toast(err.message, "error");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function handleCopy(token) {
     const url = `${window.location.origin}${window.location.pathname}#/status/${token}`;
@@ -150,7 +133,7 @@ export default function StatusPagesView({ monitors, existingGroups = [], toast }
     setBusyId(id);
     try {
       await regenerateStatusPage(id);
-      await load();
+      await onReload();
       toast("Link regenerated - the old one no longer works.");
     } catch (err) {
       toast(err.message, "error");
@@ -163,7 +146,7 @@ export default function StatusPagesView({ monitors, existingGroups = [], toast }
     setBusyId(id);
     try {
       await deleteStatusPage(id);
-      setPages((prev) => prev.filter((p) => p.id !== id));
+      await onReload();
       toast("Status page deleted.");
     } catch (err) {
       toast(err.message, "error");
@@ -250,7 +233,7 @@ export default function StatusPagesView({ monitors, existingGroups = [], toast }
           onSaved={() => {
             setFormOpen(false);
             setEditingPage(null);
-            load();
+            onReload();
           }}
           toast={toast}
         />
