@@ -372,6 +372,14 @@ a {
   color: #1a0505;
 }
 
+/* Whichever action ends up rightmost gets the matching corner radius -
+   keyed off position, not color, so this still holds if the action
+   order ever changes. */
+.pl-swipe-row__actions > button:last-child {
+  border-top-right-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+
 .pl-swipe-row__content {
   position: relative;
   z-index: 2;
@@ -379,10 +387,13 @@ a {
   width: 100%;
   /* Explicit opaque background, not just relying on the card's own
      near-transparent panel fill, so the actions layer underneath is
-     fully hidden at rest regardless of paint-order edge cases. */
+     fully hidden at rest regardless of paint-order edge cases. No
+     will-change/border-radius here - the outer .pl-swipe-row is the
+     single source of truth for the rounded clip; giving this layer
+     its own border-radius on top of a transformed compositing layer
+     is what was producing the corner seam.
+  */
   background: var(--bg-alt);
-  border-radius: var(--radius);
-  will-change: transform;
 }
 
 /* ---------- Pull to refresh ---------- */

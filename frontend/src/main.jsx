@@ -31,9 +31,33 @@ window.addEventListener(
 // registration.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {
-      // Offline fallback just won't be available this session (e.g.
-      // private browsing) - not worth surfacing to the user.
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((reg) => {
+        // Installed PWAs can sit backgrounded for a long time without
+        // the browser ever re-checking sw.js on its own, which is
+        // exactly the "reopen after a while, still looks old" case.
+        // Force a check whenever the app comes back to the
+        // foreground, not just on the initial load.
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible") reg.update().catch(() => {});
+        });
+      })
+      .catch(() => {
+        // Offline fallback just won't be available this session (e.g.
+        // private browsing) - not worth surfacing to the user.
+      });
+
+    // Once a new service worker actually takes control (i.e. an
+    // update was found and activated), the JS/CSS already loaded in
+    // this tab is the OLD version - reload once so the new one takes
+    // effect immediately instead of silently staying stale until the
+    // next manual close/reopen.
+    let refreshedOnce = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (refreshedOnce) return;
+      refreshedOnce = true;
+      window.location.reload();
     });
   });
 }
