@@ -1128,6 +1128,15 @@ a {
   .pl-shell {
     padding: 20px 14px 60px;
   }
+  /* This media query is exactly where the tab bar appears, and a
+     shorthand `padding` here was overwriting the extra bottom
+     clearance set on .pl-shell--with-tabbar above, no matter how that
+     rule was written - shorthand always wins over a single side. Redo
+     the bottom padding specifically for the tabbar case, after the
+     shorthand, so it isn't silently cancelled out again. */
+  .pl-shell--with-tabbar {
+    padding-bottom: calc(112px + env(safe-area-inset-bottom));
+  }
   .pl-detail-title {
     font-size: 19px;
   }
