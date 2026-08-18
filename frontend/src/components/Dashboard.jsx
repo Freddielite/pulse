@@ -1,7 +1,14 @@
 import { useState } from "react";
 import MonitorCard from "./MonitorCard.jsx";
 import MonitorCardSkeleton from "./MonitorCardSkeleton.jsx";
-import { checkNow, snoozeAllMonitors, unsnoozeAllMonitors } from "../api.js";
+import SwipeableRow from "./SwipeableRow.jsx";
+import PullToRefresh from "./PullToRefresh.jsx";
+import ConfirmDialog from "./ConfirmDialog.jsx";
+import { checkNow, snoozeAllMonitors, unsnoozeAllMonitors, snoozeMonitor, unsnoozeMonitor, deleteMonitor } from "../api.js";
+
+function isSnoozedNow(m) {
+  return !!m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now();
+}
 
 const SNOOZE_OPTIONS = [
   { label: "15m", minutes: 15 },
@@ -13,9 +20,38 @@ const SNOOZE_OPTIONS = [
 export default function Dashboard({ monitors, loading, onSelect, onAdd, onChanged, toast }) {
   const [checking, setChecking] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const upCount = monitors.filter((m) => m.current_status === "up").length;
   const downCount = monitors.filter((m) => m.current_status === "down").length;
   const anySnoozed = monitors.some((m) => m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now());
+
+  async function handleToggleSnooze(monitor) {
+    try {
+      if (isSnoozedNow(monitor)) {
+        await unsnoozeMonitor(monitor.id);
+        toast(`${monitor.name} unsnoozed.`);
+      } else {
+        await snoozeMonitor(monitor.id, 60);
+        toast(`${monitor.name} snoozed for 1h.`);
+      }
+      onChanged();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function handleDeleteOne(id) {
+    const monitor = monitors.find((m) => m.id === id);
+    try {
+      await deleteMonitor(id);
+      toast(`${monitor?.name || "Monitor"} deleted.`);
+      onChanged();
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setConfirmingDeleteId(null);
+    }
+  }
 
   async function handleCheckNow() {
     setChecking(true);
@@ -57,7 +93,8 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
   }
 
   return (
-    <div>
+    <>
+      <PullToRefresh onRefresh={onChanged}>
       <div className="pl-panel pl-dashboard-toolbar">
         <div className="pl-dashboard-stats">
           {loading ? (
@@ -127,25 +164,45 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
           </div>
         )
       ) : (
-        <GroupedMonitorList monitors={monitors} onSelect={onSelect} />
+        <GroupedMonitorList monitors={monitors} onSelect={onSelect} onToggleSnooze={handleToggleSnooze} onDelete={setConfirmingDeleteId} />
       )}
-    </div>
+      </PullToRefresh>
+
+      {confirmingDeleteId && (
+        <ConfirmDialog
+          title="Delete this monitor?"
+          body="This stops all checks for it and removes its history. This can't be undone."
+          confirmLabel="Delete"
+          onConfirm={() => handleDeleteOne(confirmingDeleteId)}
+          onCancel={() => setConfirmingDeleteId(null)}
+        />
+      )}
+    </>
   );
 }
 
 // Only bothers grouping when there's actually more than one group present.
 // A single flat list is simpler to scan than a UI with one lonely group
 // header on it, so that case renders exactly like it always did.
-function GroupedMonitorList({ monitors, onSelect }) {
+function GroupedMonitorList({ monitors, onSelect, onToggleSnooze, onDelete }) {
   const groupNames = [...new Set(monitors.map((m) => m.group_name).filter(Boolean))].sort();
-  if (groupNames.length === 0) {
+
+  function renderCard(m) {
     return (
-      <div className="pl-monitor-grid">
-        {monitors.map((m) => (
-          <MonitorCard key={m.id} monitor={m} onClick={() => onSelect(m)} />
-        ))}
-      </div>
+      <SwipeableRow
+        key={m.id}
+        actions={[
+          { label: isSnoozedNow(m) ? "Unsnooze" : "Snooze 1h", tone: "snooze", onClick: () => onToggleSnooze(m) },
+          { label: "Delete", tone: "delete", onClick: () => onDelete(m.id) },
+        ]}
+      >
+        <MonitorCard monitor={m} onClick={() => onSelect(m)} />
+      </SwipeableRow>
     );
+  }
+
+  if (groupNames.length === 0) {
+    return <div className="pl-monitor-grid">{monitors.map(renderCard)}</div>;
   }
 
   const ungrouped = monitors.filter((m) => !m.group_name);
@@ -153,20 +210,14 @@ function GroupedMonitorList({ monitors, onSelect }) {
     <div>
       {ungrouped.length > 0 && (
         <div className="pl-monitor-grid" style={{ marginBottom: 20 }}>
-          {ungrouped.map((m) => (
-            <MonitorCard key={m.id} monitor={m} onClick={() => onSelect(m)} />
-          ))}
+          {ungrouped.map(renderCard)}
         </div>
       )}
       {groupNames.map((group) => (
         <div key={group} style={{ marginBottom: 20 }}>
           <div className="pl-section-label" style={{ margin: "0 0 10px" }}>{group}</div>
           <div className="pl-monitor-grid">
-            {monitors
-              .filter((m) => m.group_name === group)
-              .map((m) => (
-                <MonitorCard key={m.id} monitor={m} onClick={() => onSelect(m)} />
-              ))}
+            {monitors.filter((m) => m.group_name === group).map(renderCard)}
           </div>
         </div>
       ))}

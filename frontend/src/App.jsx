@@ -9,6 +9,7 @@ import MonitorDetail from "./components/MonitorDetail.jsx";
 import MonitorForm from "./components/MonitorForm.jsx";
 import SettingsView from "./components/SettingsView.jsx";
 import StatusPagesView from "./components/StatusPagesView.jsx";
+import InstallPrompt from "./components/InstallPrompt.jsx";
 
 // Bottom tab bar icons, hand-drawn rather than pulling in an icon
 // library for three glyphs. Monitors reuses the app's own pulse-line
@@ -156,6 +157,7 @@ export default function App() {
         </div>
       </div>
       <PulseLine />
+      <InstallPrompt />
 
       <div key={pageKey} className={`pl-page pl-page--${navAction}`}>
         {tab === "dashboard" && !selected && (

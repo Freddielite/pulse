@@ -283,6 +283,132 @@ a {
   }
 }
 
+/* ---------- Install prompt banner ---------- */
+
+.pl-install-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.pl-install-banner__icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 8px;
+}
+
+.pl-install-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.pl-install-banner__title {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.pl-install-banner__desc {
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  margin-top: 2px;
+}
+
+.pl-install-banner__close {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  padding: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pl-install-banner__close svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---------- Swipe-to-reveal row actions (monitor cards) ---------- */
+
+.pl-swipe-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  /* Opaque backer so the action colors underneath don't tint through
+     the monitor card's own near-transparent panel background before
+     it's actually been swiped open. */
+  background: var(--bg-alt);
+}
+
+.pl-swipe-row__actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+}
+
+.pl-swipe-action {
+  width: 76px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 8px;
+  text-align: center;
+}
+
+.pl-swipe-action--snooze {
+  background: var(--amber);
+  color: #241a05;
+}
+
+.pl-swipe-action--delete {
+  background: var(--alert);
+  color: #1a0505;
+}
+
+.pl-swipe-row__content {
+  position: relative;
+  will-change: transform;
+}
+
+/* ---------- Pull to refresh ---------- */
+
+.pl-ptr-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.pl-ptr-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--panel-border);
+  border-top-color: var(--signal);
+  border-radius: 50%;
+}
+
+.pl-ptr-spinner--spin {
+  animation: pl-spin 0.7s linear infinite;
+}
+
+@keyframes pl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-ptr-spinner--spin {
+    animation: none !important;
+  }
+}
+
 /* ---------- Skeleton loaders ---------- */
 
 .pl-skeleton {

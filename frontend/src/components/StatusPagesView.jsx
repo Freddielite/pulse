@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusPage } from "../api.js";
+import { createPortal } from "react-dom";
 import Dropdown from "./Dropdown.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 
@@ -58,7 +59,11 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
     }
   }
 
-  return (
+  // Portal to <body>: this view lives inside .pl-page (the animated
+  // page-transition wrapper), and a transform left on that ancestor
+  // by the animation would otherwise reposition/clip this fixed
+  // overlay - see the identical fix and reasoning in ConfirmDialog.jsx.
+  return createPortal(
     <div className="pl-overlay" onClick={onClose}>
       <div className="pl-panel pl-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pl-modal__title">{editing ? "Edit status page" : "New status page"}</div>
@@ -109,7 +114,8 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
