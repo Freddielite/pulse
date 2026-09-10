@@ -286,5 +286,149 @@ export async function migrate() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id);
+
+    -- ===================================================================
+    -- Security posture
+    -- ===================================================================
+
+    -- Auth-negative assertion: send this monitor's request *without* its
+    -- credential and require the server to refuse. Opt-in per monitor
+    -- (off by default) because it doubles the request count for a
+    -- monitor that has it on, and because "this endpoint should reject
+    -- anonymous callers" is only true of some of them. auth_probe_expect
+    -- is a comma-separated list of statuses that count as a refusal;
+    -- 401,403 covers almost everything, but an API that answers 404 to
+    -- hide the existence of a resource is a legitimate design too.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_probe_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_probe_expect TEXT NOT NULL DEFAULT '401,403';
+    -- pass | fail | inconclusive | NULL (never run). Stored rather than
+    -- derived so the alert can fire on the transition only - same
+    -- self-quieting shape as content_hash, not a nag on every check.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_probe_status TEXT;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_probe_checked_at TIMESTAMPTZ;
+
+    -- Full TLS posture from the same handshake the expiry check already
+    -- performs (see lib/certCheck.js getTlsPosture). tls_fingerprint is
+    -- the SHA-256 of the leaf certificate: an unexpected change to it is
+    -- the signal for a hijacked DNS record, a compromised CDN account,
+    -- or a certificate reissued by someone who shouldn't have been able
+    -- to. Same baseline-then-compare shape as content_hash - the first
+    -- value seen is never an alert.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS tls_fingerprint TEXT;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS tls_posture JSONB;
+
+    -- Latest DNS record snapshot, compared against the previous one each
+    -- sweep to detect drift (see lib/dnsCheck.js). Kept on the monitor
+    -- row for the fast "what does it look like right now" read; the
+    -- dns_snapshots table below keeps the history.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS dns_snapshot JSONB;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS dns_checked_at TIMESTAMPTZ;
+
+    -- Certificate Transparency log monitoring. Defaults on for https
+    -- monitors because the signal-to-noise is unusually good, but it's a
+    -- per-monitor switch since it's the one feature here that queries a
+    -- third-party service (crt.sh) rather than the user's own site.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS ct_enabled BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS ct_checked_at TIMESTAMPTZ;
+
+    -- Third-party origins seen in the page's script/iframe/stylesheet
+    -- tags on the last scan. A new origin appearing here between scans is
+    -- the supply-chain signal - it's what a Magecart-style injection
+    -- looks like from the outside.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS third_party_origins JSONB;
+
+    -- Scans gained a grade, a severity breakdown, and scan metadata.
+    -- Older rows keep their score and findings and simply have NULLs
+    -- here; the API treats a missing grade as "computed before grading
+    -- existed" rather than backfilling, since the old findings have no
+    -- severity to compute one from.
+    ALTER TABLE security_scans ADD COLUMN IF NOT EXISTS grade TEXT;
+    ALTER TABLE security_scans ADD COLUMN IF NOT EXISTS summary JSONB;
+    ALTER TABLE security_scans ADD COLUMN IF NOT EXISTS meta JSONB;
+
+    -- One timeline of everything security-relevant that has happened to a
+    -- monitor: a check that regressed from pass to fail, a certificate
+    -- fingerprint that changed, a DNS record that moved, a new
+    -- certificate in the CT logs, an endpoint that stopped requiring
+    -- auth.
+    --
+    -- This table is what turns a scanner into a monitor. A scan result on
+    -- its own answers "how is it configured right now"; the interesting
+    -- question for anyone actually running a service is "what changed,
+    -- and when" - which is the same question the checks and incidents
+    -- tables already answer for uptime. Keeping it as one events table
+    -- rather than one per feature means the UI has a single thing to
+    -- render and every new detector gets the timeline for free.
+    CREATE TABLE IF NOT EXISTS security_events (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      monitor_id   UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      -- scan_regression | scan_improvement | tls_fingerprint_changed |
+      -- dns_drift | ct_new_certificate | auth_probe_failed |
+      -- auth_probe_recovered | third_party_origin_added
+      kind         TEXT NOT NULL,
+      severity     TEXT NOT NULL, -- critical | high | medium | low | info
+      title        TEXT NOT NULL,
+      detail       TEXT,
+      -- Whatever the detector wants to keep for the UI: the before/after
+      -- values of a DNS record, the issuer of a new certificate. Free
+      -- shape on purpose - each detector's payload is only ever read by
+      -- the code that wrote it plus a generic renderer.
+      data         JSONB,
+      acknowledged BOOLEAN NOT NULL DEFAULT false
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_security_events_monitor_time ON security_events(monitor_id, created_at DESC);
+    -- Partial index for the dashboard's "anything unacknowledged?" badge,
+    -- which only ever touches the handful of open rows.
+    CREATE INDEX IF NOT EXISTS idx_security_events_open ON security_events(monitor_id) WHERE acknowledged = false;
+
+    -- Certificates seen in the public CT logs for a monitor's domain.
+    -- Existence in this table is what makes a certificate "known", so a
+    -- row appearing is what a new-issuance alert keys off. UNIQUE on
+    -- (monitor_id, cert_id) lets the sweep insert blindly with ON
+    -- CONFLICT DO NOTHING instead of reading the whole set first.
+    CREATE TABLE IF NOT EXISTS ct_certificates (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      monitor_id    UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      cert_id       TEXT NOT NULL,
+      common_name   TEXT,
+      names         JSONB,
+      issuer        TEXT,
+      not_before    TIMESTAMPTZ,
+      not_after     TIMESTAMPTZ,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (monitor_id, cert_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ct_certificates_monitor ON ct_certificates(monitor_id, not_before DESC);
+
+    -- DNS snapshot history. The monitor row holds the current snapshot
+    -- for fast reads; this keeps the trail so "when did the A record
+    -- change" is answerable after the fact, which is exactly the question
+    -- asked during an incident review.
+    CREATE TABLE IF NOT EXISTS dns_snapshots (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      monitor_id  UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      taken_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      records     JSONB NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dns_snapshots_monitor_time ON dns_snapshots(monitor_id, taken_at DESC);
+
+    -- Rate limiting for authentication endpoints, keyed by IP and by
+    -- email. Persisted rather than in-process memory because Render can
+    -- and does restart a free-tier service at will, and an in-memory
+    -- counter that resets on restart is a lockout an attacker can simply
+    -- wait out. Old rows are swept opportunistically (see
+    -- middleware/rateLimit.js) rather than needing their own scheduled
+    -- job, in keeping with this app having no background runner.
+    CREATE TABLE IF NOT EXISTS auth_attempts (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      bucket      TEXT NOT NULL,
+      attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_auth_attempts_bucket_time ON auth_attempts(bucket, attempted_at DESC);
   `);
 }

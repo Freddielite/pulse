@@ -26,6 +26,10 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [contentDiffEnabled, setContentDiffEnabled] = useState(monitor?.content_diff_enabled || false);
   const [degradedEnabled, setDegradedEnabled] = useState(monitor?.degraded_threshold_ms != null);
   const [degradedThresholdMs, setDegradedThresholdMs] = useState(monitor?.degraded_threshold_ms || 1500);
+  const [authProbeEnabled, setAuthProbeEnabled] = useState(monitor?.auth_probe_enabled || false);
+  const [authProbeExpect, setAuthProbeExpect] = useState(monitor?.auth_probe_expect || "401,403");
+  // Defaults on for a new monitor, matching the backend column default.
+  const [ctEnabled, setCtEnabled] = useState(monitor ? monitor.ct_enabled !== false : true);
   const [alertAfterSlow, setAlertAfterSlow] = useState(monitor?.alert_after_slow || 3);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -67,6 +71,9 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       alert_after_failures: Number(alertAfterFailures) || 1,
       content_diff_enabled: monitorType === "http" ? contentDiffEnabled : false,
       degraded_threshold_ms: degradedEnabled ? Number(degradedThresholdMs) : null,
+      auth_probe_enabled: monitorType === "http" ? authProbeEnabled : false,
+      auth_probe_expect: authProbeExpect.trim() || "401,403",
+      ct_enabled: ctEnabled,
       alert_after_slow: Number(alertAfterSlow) || 3,
     };
     try {
@@ -278,6 +285,50 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               </div>
             </div>
           )}
+          {monitorType === "http" && (
+            <>
+              <div className="pl-toggle-row">
+                <div>
+                  <span>Assert this endpoint refuses unauthenticated requests</span>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>
+                    Sends the same request without the auth header and fails if the server answers it anyway. Catches
+                    an endpoint that shipped with its auth middleware missing - every other check goes green for that,
+                    because the endpoint does respond, quickly, with valid data. To everyone.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={`pl-toggle ${authProbeEnabled ? "on" : ""}`}
+                  onClick={() => setAuthProbeEnabled(!authProbeEnabled)}
+                >
+                  <span className="pl-toggle__knob" />
+                </button>
+              </div>
+              {authProbeEnabled && (
+                <div className="pl-field">
+                  <label>Statuses that count as a refusal</label>
+                  <input value={authProbeExpect} onChange={(e) => setAuthProbeExpect(e.target.value)} placeholder="401,403" />
+                  <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+                    Comma-separated. 401,403 covers almost everything; add 404 if the API hides protected resources
+                    rather than admitting they exist. A redirect to a login page also counts as a refusal.
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          <div className="pl-toggle-row">
+            <div>
+              <span>Watch Certificate Transparency logs for this domain</span>
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>
+                Alerts when a certificate is issued for this domain that you didn't expect, and turns up subdomains
+                you'd forgotten were live. The one check here that queries a third party (crt.sh) rather than your
+                own site.
+              </div>
+            </div>
+            <button type="button" className={`pl-toggle ${ctEnabled ? "on" : ""}`} onClick={() => setCtEnabled(!ctEnabled)}>
+              <span className="pl-toggle__knob" />
+            </button>
+          </div>
           <div className="pl-toggle-row">
             <span>This is a Render free-tier app I want to keep awake</span>
             <button type="button" className={`pl-toggle ${keepAlive ? "on" : ""}`} onClick={() => setKeepAlive(!keepAlive)}>

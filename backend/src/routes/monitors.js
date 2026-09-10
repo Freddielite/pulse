@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { runUptimeChecks } from "../lib/checkRunner.js";
-import { scanSite } from "../lib/scanner.js";
+import { runUptimeChecks, scanAndRecord, runDnsSweep, runCtSweep } from "../lib/checkRunner.js";
+import { parseAcceptedStatuses } from "../lib/authProbe.js";
 import { generateShareToken } from "../lib/shareLinks.js";
 
 const router = Router();
@@ -28,6 +28,29 @@ function validateTcpUrl(url) {
   const parsed = new URL(url); // caller already confirmed this doesn't throw
   if (parsed.protocol !== "tcp:") return "a TCP monitor's URL must start with tcp://, e.g. tcp://db.example.com:5432";
   if (!parsed.port) return "a TCP monitor's URL needs a port, e.g. tcp://db.example.com:5432";
+  return null;
+}
+
+// auth_probe_expect is a comma-separated status list. Validated here
+// rather than trusted, because an unparseable value would silently fall
+// back to the 401,403 default at probe time and the user would have no
+// idea their "404" was ignored.
+function validateAuthProbe(enabled, expect) {
+  if (!enabled) return null;
+  if (expect === undefined || expect === null || expect === "") return null;
+  const parsed = String(expect)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parsed.length === 0) return "the auth probe needs at least one expected status code";
+  for (const part of parsed) {
+    const code = Number(part);
+    if (!Number.isInteger(code) || code < 100 || code > 599) return `"${part}" isn't a valid HTTP status code`;
+    // A 2xx as the "refusal" status would make the probe assert the exact
+    // opposite of what it's for, and is much more likely a typo than an
+    // intention.
+    if (code >= 200 && code < 300) return `${code} is a success status - the auth probe asserts that an unauthenticated request is *refused*, so this should be 401, 403, or similar`;
+  }
   return null;
 }
 
@@ -79,7 +102,7 @@ router.post("/", async (req, res) => {
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
     group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
-    degraded_threshold_ms, alert_after_slow,
+    degraded_threshold_ms, alert_after_slow, auth_probe_enabled, auth_probe_expect, ct_enabled,
   } = req.body;
   if (!name?.trim() || !url?.trim()) return res.status(400).json({ error: "name and url are required" });
   try {
@@ -99,6 +122,8 @@ router.post("/", async (req, res) => {
   if (alert_after_slow !== undefined && alert_after_slow !== null && Number(alert_after_slow) < 1) {
     return res.status(400).json({ error: "alert after slow checks must be at least 1" });
   }
+  const authProbeError = validateAuthProbe(auth_probe_enabled, auth_probe_expect);
+  if (authProbeError) return res.status(400).json({ error: authProbeError });
   const type = normalizeMonitorType(monitor_type);
   const stepsError = validateSteps(type, synthetic_steps);
   if (stepsError) return res.status(400).json({ error: stepsError });
@@ -109,8 +134,8 @@ router.post("/", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `INSERT INTO monitors
-         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec, degraded_threshold_ms, alert_after_slow)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
+         (user_id, name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec, degraded_threshold_ms, alert_after_slow, auth_probe_enabled, auth_probe_expect, ct_enabled)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *`,
       [
         req.userId,
         name.trim(),
@@ -130,6 +155,9 @@ router.post("/", async (req, res) => {
         Number(check_timeout_sec) || 15,
         degraded_threshold_ms ? Number(degraded_threshold_ms) : null,
         Number(alert_after_slow) || 3,
+        !!auth_probe_enabled,
+        auth_probe_expect?.trim() || "401,403",
+        ct_enabled === undefined ? true : !!ct_enabled,
       ]
     );
     res.status(201).json(rows[0]);
@@ -143,7 +171,7 @@ router.patch("/:id", async (req, res) => {
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
     active, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
-    degraded_threshold_ms, alert_after_slow,
+    degraded_threshold_ms, alert_after_slow, auth_probe_enabled, auth_probe_expect, ct_enabled,
   } = req.body;
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
@@ -157,6 +185,8 @@ router.patch("/:id", async (req, res) => {
   if (alert_after_slow !== undefined && alert_after_slow !== null && Number(alert_after_slow) < 1) {
     return res.status(400).json({ error: "alert after slow checks must be at least 1" });
   }
+  const authProbeError = validateAuthProbe(auth_probe_enabled, auth_probe_expect);
+  if (authProbeError) return res.status(400).json({ error: authProbeError });
   if (monitor_type !== undefined) {
     const stepsError = validateSteps(normalizeMonitorType(monitor_type), synthetic_steps);
     if (stepsError) return res.status(400).json({ error: stepsError });
@@ -189,6 +219,13 @@ router.patch("/:id", async (req, res) => {
          check_timeout_sec = COALESCE($19, check_timeout_sec),
          degraded_threshold_ms = $20,
          alert_after_slow = COALESCE($21, alert_after_slow),
+         auth_probe_enabled = COALESCE($22, auth_probe_enabled),
+         auth_probe_expect = COALESCE($23, auth_probe_expect),
+         ct_enabled = COALESCE($24, ct_enabled),
+         -- Turning the probe off clears its last verdict rather than
+         -- leaving a stale "fail" sitting on the monitor row, which the
+         -- UI would otherwise keep rendering as a live problem.
+         auth_probe_status = CASE WHEN $22 IS NOT NULL AND $22 = false THEN NULL ELSE auth_probe_status END,
          updated_at = now()
        WHERE id = $1 AND user_id = $2 RETURNING *`,
       [
@@ -213,6 +250,9 @@ router.patch("/:id", async (req, res) => {
         check_timeout_sec ? Number(check_timeout_sec) : null,
         degraded_threshold_ms ? Number(degraded_threshold_ms) : null,
         alert_after_slow ? Number(alert_after_slow) : null,
+        auth_probe_enabled === undefined ? null : !!auth_probe_enabled,
+        auth_probe_expect?.trim() || null,
+        ct_enabled === undefined ? null : !!ct_enabled,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
@@ -319,7 +359,10 @@ router.get("/:id/security", async (req, res) => {
 });
 
 // Force a scan right now, ignoring the 24h cadence, the same "I don't want
-// to wait" escape hatch check-now gives uptime checks.
+// to wait" escape hatch check-now gives uptime checks. Goes through
+// scanAndRecord so a manual scan produces the same regression events an
+// automatic sweep would - there's no second path that quietly skips the
+// diffing.
 router.post("/:id/security/run", async (req, res) => {
   const owns = await pool.query(`SELECT * FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
   if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
@@ -328,13 +371,150 @@ router.post("/:id/security/run", async (req, res) => {
     return res.status(400).json({ error: "Security scanning doesn't apply to a TCP monitor - there's no HTTP response to check headers on." });
   }
 
-  const result = await scanSite(monitor.url);
+  const scan = await scanAndRecord(monitor);
+  res.json(scan);
+});
+
+// Score history for the trend chart. This is the read that makes the
+// scan a monitor rather than a one-off: a score on its own says how a
+// site is configured, a series says whether it's getting better or worse
+// and when it changed.
+router.get("/:id/security/history", async (req, res) => {
+  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const limit = Math.min(Number(req.query.limit) || 60, 365);
   const { rows } = await pool.query(
-    `INSERT INTO security_scans (monitor_id, score, findings) VALUES ($1, $2, $3) RETURNING *`,
-    [monitor.id, result.score, JSON.stringify(result.findings)]
+    // Deliberately not selecting `findings` - a history query pulling the
+    // full findings array for 60 scans would be megabytes of JSON to
+    // render a sparkline out of two columns.
+    `SELECT id, scanned_at, score, grade, summary FROM security_scans
+     WHERE monitor_id = $1 ORDER BY scanned_at DESC LIMIT $2`,
+    [req.params.id, limit]
   );
-  await pool.query(`UPDATE monitors SET security_scanned_at = now() WHERE id = $1`, [monitor.id]);
+  res.json(rows.reverse());
+});
+
+// The security timeline: everything that changed, newest first.
+router.get("/:id/security/events", async (req, res) => {
+  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const { rows } = await pool.query(
+    `SELECT * FROM security_events WHERE monitor_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [req.params.id, limit]
+  );
+  res.json(rows);
+});
+
+// Acknowledging an event doesn't delete it - the timeline is a record,
+// and a client report is worth more when it shows what happened and that
+// it was dealt with, not just what's currently outstanding.
+router.post("/:id/security/events/:eventId/acknowledge", async (req, res) => {
+  const { rows } = await pool.query(
+    `UPDATE security_events e SET acknowledged = true
+     FROM monitors m
+     WHERE e.id = $1 AND e.monitor_id = m.id AND m.id = $2 AND m.user_id = $3
+     RETURNING e.*`,
+    [req.params.eventId, req.params.id, req.userId]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "event not found" });
   res.json(rows[0]);
+});
+
+// TLS posture from the last handshake: protocol, cipher, chain, SANs,
+// fingerprint. Read straight off the monitor row - the cert sweep is what
+// populates it.
+router.get("/:id/tls", async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT tls_posture, tls_fingerprint, ssl_expires_at, cert_checked_at, cert_check_error
+     FROM monitors WHERE id = $1 AND user_id = $2`,
+    [req.params.id, req.userId]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  res.json(rows[0]);
+});
+
+// Current DNS snapshot plus recent history, for the drift panel.
+router.get("/:id/dns", async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT dns_snapshot, dns_checked_at FROM monitors WHERE id = $1 AND user_id = $2`,
+    [req.params.id, req.userId]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const { rows: history } = await pool.query(
+    `SELECT id, taken_at FROM dns_snapshots WHERE monitor_id = $1 ORDER BY taken_at DESC LIMIT 20`,
+    [req.params.id]
+  );
+  res.json({ ...rows[0], history });
+});
+
+router.post("/:id/dns/run", async (req, res) => {
+  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  // Reuses the sweep rather than duplicating its drift-detection logic,
+  // scoped to this one monitor by clearing its due-clock first. Same
+  // reasoning as routing the manual scan through scanAndRecord.
+  await pool.query(`UPDATE monitors SET dns_checked_at = NULL WHERE id = $1`, [req.params.id]);
+  await runDnsSweep({ userId: req.userId, limit: 1 });
+  const { rows } = await pool.query(
+    `SELECT dns_snapshot, dns_checked_at FROM monitors WHERE id = $1 AND user_id = $2`,
+    [req.params.id, req.userId]
+  );
+  res.json(rows[0]);
+});
+
+// Certificates seen in the public CT logs, plus the subdomain inventory
+// derived from them.
+router.get("/:id/certificates", async (req, res) => {
+  const owns = await pool.query(`SELECT id, url FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const { rows } = await pool.query(
+    `SELECT cert_id, common_name, names, issuer, not_before, not_after, first_seen_at
+     FROM ct_certificates WHERE monitor_id = $1 ORDER BY not_before DESC NULLS LAST LIMIT 200`,
+    [req.params.id]
+  );
+
+  // The subdomain inventory is derived here rather than stored, so it's
+  // always consistent with the certificate rows it comes from.
+  const subdomains = new Set();
+  for (const row of rows) {
+    for (const name of row.names || []) {
+      if (!name.startsWith("*.")) subdomains.add(name);
+    }
+  }
+
+  // Which of those subdomains the user is already monitoring, so the UI
+  // can offer one-click "monitor this too" on the ones they aren't. This
+  // is the payoff of CT discovery: the forgotten staging box shows up
+  // here as an unmonitored hostname.
+  const { rows: existing } = await pool.query(`SELECT url FROM monitors WHERE user_id = $1`, [req.userId]);
+  const monitoredHosts = new Set(
+    existing
+      .map((row) => {
+        try {
+          return new URL(row.url).hostname.toLowerCase();
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+  );
+
+  res.json({
+    certificates: rows,
+    subdomains: [...subdomains].sort().map((hostname) => ({ hostname, monitored: monitoredHosts.has(hostname) })),
+  });
+});
+
+router.post("/:id/certificates/run", async (req, res) => {
+  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  await pool.query(`UPDATE monitors SET ct_checked_at = NULL WHERE id = $1`, [req.params.id]);
+  const checked = await runCtSweep({ userId: req.userId, limit: 1 });
+  if (checked === 0) {
+    return res.status(502).json({ error: "The Certificate Transparency lookup didn't complete - crt.sh may be slow or unavailable right now. Try again shortly." });
+  }
+  res.json({ ok: true });
 });
 
 // Uptime percentage over rolling windows, computed from the checks log

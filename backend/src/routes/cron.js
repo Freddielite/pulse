@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
-import { runUptimeChecks, runCertSweep, runSecuritySweep } from "../lib/checkRunner.js";
+import { runUptimeChecks, runCertSweep, runSecuritySweep, runDnsSweep, runCtSweep } from "../lib/checkRunner.js";
 import { runDigestSweep } from "../lib/digest.js";
 
 const router = Router();
@@ -36,13 +36,21 @@ router.all("/tick", requireCronSecret, async (req, res) => {
   // sweep right below it.
   const certChecks = await runCertSweep();
   const securityScans = await runSecuritySweep();
+  // DNS drift and Certificate Transparency, on their own cadences (see
+  // the interval constants in checkRunner.js). Both are per-run capped
+  // the same way the cert and security sweeps are, so a backlog can
+  // never turn one tick into a long-running job - which matters more
+  // here than elsewhere, because the external cron service calling this
+  // endpoint has its own request timeout.
+  const dnsChecks = await runDnsSweep();
+  const ctChecks = await runCtSweep();
   // Same unscoped-across-everyone shape as the sweeps above - weekly
   // cadence means this is a no-op most ticks (nobody's clock is due),
   // so it costs nothing to check on every tick rather than needing its
   // own separate schedule.
   const digestsSent = await runDigestSweep();
 
-  res.json({ ...uptimeResults, certChecks, securityScans, digestsSent });
+  res.json({ ...uptimeResults, certChecks, securityScans, dnsChecks, ctChecks, digestsSent });
 });
 
 export default router;

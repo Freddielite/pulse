@@ -58,6 +58,14 @@ curls the same URL works identically.
 | `TELEGRAM_BOT_TOKEN` | For Telegram | One bot for the whole instance, from [@BotFather](https://t.me/BotFather). |
 | `TELEGRAM_CHAT_ID` | Optional, for Telegram | Hardcodes a single destination chat for the whole deployment. Simplest setup for a single-user instance - set this and skip per-user chat IDs entirely. If unset, falls back to each user's own `telegram_chat_id` (see below), for deployments with more than one account. |
 
+
+**No new environment variables.** Everything in the security suite runs
+off configuration already in the database (per-monitor toggles) or needs
+no credentials at all - DNS uses the system resolver, TLS is a plain
+handshake, and crt.sh is a public endpoint with no key. The rate limiter
+and security headers need nothing beyond the `NODE_ENV` that's already
+required.
+
 ### Frontend (Vercel)
 
 | Variable | Required | Notes |
@@ -90,11 +98,187 @@ curls the same URL works identically.
   parser still doesn't recognize - it's not a promise the domain never
   expires. SSL certificate expiry, by contrast, is read directly off the
   live TLS handshake and is reliable.
+- **Certificate Transparency depends on crt.sh.** It's free, public and
+  needs no key, but it's also occasionally slow or briefly unavailable.
+  Every failure there is soft: the sweep logs it, marks the monitor
+  checked so one unavailable third party can't jam the same monitor
+  forever, and moves on. A CT lookup being down is not an event worth
+  alerting anyone about.
+- **The registrable-root heuristic is wrong for multi-part suffixes.**
+  `registrableRoot()` in `lib/dnsCheck.js` takes the last two labels,
+  which is right for `example.com` and wrong for `example.co.uk` or
+  `example.com.ng` - it would look up `co.uk`. This is the same
+  simplification `getDomainExpiry()` has always made. Fixing it properly
+  means shipping the Public Suffix List, which is a dependency plus a
+  data file that goes stale; it's a deliberate trade, not an oversight.
+- **The auth-required assertion can't run on a monitor that's down.** It
+  only runs on the passing branch of a check, because "does this endpoint
+  still refuse anonymous callers" is unanswerable when the endpoint isn't
+  answering at all. Practically: if you point a monitor at a protected
+  endpoint *without* giving it credentials, the uptime check will record
+  it as down (401 != expected 200) and the probe will never run. Give the
+  monitor its auth header, or set `expected_status` to what the
+  authenticated request actually returns.
+- **Subdomain takeover detection is signature-based.** It covers the 8
+  platforms whose "nothing is configured here" pages are recognizable
+  (GitHub Pages, Heroku, S3, Netlify, Vercel, Shopify, Fastly, Azure). A
+  dangling CNAME to anything else won't be flagged, and an unreachable
+  host is treated as inconclusive rather than as a takeover - a dangling
+  record and a temporarily down host look identical from outside, and
+  reporting the second as the first would be a frightening false
+  positive.
 - **WHOIS needs outbound TCP on port 43.** Most hosts allow this, but
   it's not universal. If every domain expiry check fails on your Render
   instance, this is the first thing to check.
 
 ## Recent changes
+
+- **Security suite: scoring, regressions, TLS/DNS/CT posture, auth
+  assertions.** The largest change since the original scanner port, and
+  it's less "more checks" than a change in what the feature *is*: a
+  scanner answers "how is this configured right now," a monitor answers
+  "what changed, and when." Everything below serves the second question,
+  because that's the one the rest of this app already answers for uptime.
+
+  **Two bugs in the ported scanner, fixed first.** (1) Header checks used
+  `headers.has()`, so a `Content-Security-Policy: default-src *` and a
+  `Strict-Transport-Security: max-age=1` both passed. Those are worse
+  than no finding, because they read green while providing nothing. Every
+  header is now graded on its value. (2) Exposed-path checks treated any
+  HTTP 200 as "this file is public," which is wrong for every SPA - a
+  React app on Vercel serves index.html with a 200 for `/.env`,
+  `/.git/config` and every other path that doesn't exist, so healthy
+  sites scored zero on four checks. Paths are now judged against a
+  soft-404 baseline (fetch a random path first, fingerprint the
+  response), a content signature (an `.env` finding needs a body that
+  actually looks like `KEY=VALUE`), and a content-type gate (an HTML
+  response can never be a real `.env`, `.sql` dump or JSON config).
+  That last rule was added after live testing found two false positives
+  of exactly the class this was meant to prevent: `github.com/swagger-ui.html`
+  is a real 200 profile page for a user named "swagger-ui", and
+  `github.com/graphql?query=...` echoes the query string into a meta tag,
+  so the naive "does `__schema` appear in the body" test read a normal
+  404-ish page as a live introspection endpoint. GraphQL detection now
+  requires a JSON response that parses with a populated `data.__schema`.
+
+  **Severity weighting** (`lib/severity.js`) replaces pass/total scoring.
+  Critical is worth 10x a low finding, INFO findings are reported but
+  never scored, and any critical failure forces the grade to F - a number
+  that can show 85/100 while `.env` is world-readable is a number that
+  tracks check count rather than risk, and adding cosmetic checks would
+  mechanically dilute the serious ones.
+
+  **Regression detection.** `security_scans` already kept history; it was
+  just never read. `scanAndRecord()` in `checkRunner.js` now diffs each
+  scan against the previous one and records an event per check that flipped
+  pass -> fail. A check present only in the newer scan is deliberately
+  *not* a regression - otherwise the first scan after any Pulse upgrade
+  would tell every user their site got worse, and the alert would never
+  be trusted again. The manual "Rescan now" route goes through the same
+  function rather than its own copy, so an on-demand scan can't silently
+  skip the diffing.
+
+  **`security_events`, one table for every detector.** Six near-identical
+  alert functions in `checkRunner.js` were already a pattern worth not
+  repeating five more times, so detections go through
+  `lib/securityEvents.js` instead: it writes the row, decides whether the
+  severity is worth notifying (medium and up; a missing Permissions-Policy
+  is never worth a phone buzzing at 2am), and sends over the same three
+  channels as every other alert. Throttling lives there too, keyed on a
+  caller-supplied dedupe key and checked *against the table* rather than
+  an in-process cache - Render restarts this service constantly, and an
+  in-memory throttle would leak a duplicate notification on every
+  redeploy.
+
+  **TLS posture** (`lib/certCheck.js`). `getTlsPosture()` replaces
+  `getSslExpiry()` internally (the old signature is kept as a thin wrapper,
+  since the digest and expiry alert only ever wanted the date). It reads
+  protocol, cipher, key size, SANs with wildcard-aware hostname matching,
+  chain length, trust status and the SHA-256 fingerprint - all of it
+  already sitting on the socket the expiry-only version was discarding.
+  `rejectUnauthorized: false` is deliberate: an expired or self-signed
+  certificate is precisely what this should *report*, and refusing the
+  connection would turn the most interesting findings into a bare
+  "handshake failed". Fingerprint changes alert, with severity depending
+  on whether the issuer also changed - same issuer is a renewal, different
+  issuer on a domain you didn't move is worth looking at immediately.
+  First fingerprint seen is a baseline, never an alert, same as
+  `content_hash`.
+
+  **DNS posture and drift** (`lib/dnsCheck.js`, `node:dns/promises`, no new
+  dependency). Snapshots the records every 6 hours, diffs against the
+  previous snapshot, grades SPF/DMARC/CAA/NS, and detects dangling CNAMEs
+  across 8 platforms. The distinction that matters here: a lookup that
+  *fails* (timeout, SERVFAIL) is tracked separately from one that comes
+  back empty (ENODATA/ENOTFOUND), and only the second is ever graded or
+  diffed. Live testing caught this - the sandbox couldn't resolve TXT, and
+  the first version confidently reported "no SPF record" for a domain
+  that has one. A transient resolver failure must never read as "your
+  nameservers were removed".
+
+  **Certificate Transparency** (`lib/ctLogs.js`, crt.sh). Alerts on
+  certificates issued for the domain, with severity depending on whether
+  that CA has issued for you before. Two rules keep it quiet: the first
+  sweep for a monitor imports the whole current certificate history as a
+  baseline without alerting, and only certificates issued in the last 7
+  days can alert - a cert we've never seen but which was issued eight
+  months ago is a gap in *our* records, not an issuance event. The
+  subdomain inventory falls out of the same data and is the part likely
+  to earn its keep fastest: `GET /:id/certificates` returns every
+  hostname seen, flagged by whether you already monitor it, with
+  one-click "monitor this too". This is the only feature here that
+  queries a third party, hence the per-monitor `ct_enabled` switch and
+  the most conservative sweep cadence of the lot.
+
+  **Auth-required assertions** (`lib/authProbe.js`). Opt-in per monitor.
+  Sends the monitor's own request minus the credential and asserts the
+  server refuses it. `redirect: "manual"` matters - a 302 to /login is a
+  perfectly good refusal, and following it would turn that into a
+  misleading 200 from the login page. A network failure is explicitly
+  *inconclusive* and never alerts; only a repeated failure (there's a
+  retry, same reasoning as `runHttpCheck`) counts. Runs on the normal
+  check cadence rather than the daily security sweep, which costs one
+  extra request per interval for the monitors that enable it - justified
+  because an endpoint that lost its authentication is the most expensive
+  thing this app can detect, and finding out 24 hours later is barely
+  better than not finding out.
+
+  **Scope note, stated plainly:** every check added here is passive,
+  outside-in observation of infrastructure the user owns or is engaged to
+  monitor. Nothing exploits, submits, authenticates, guesses a credential,
+  or port-scans an arbitrary host. That line was already drawn
+  deliberately in this file (see the auto-fix idea below) and it's the
+  reason this tool can be pointed at a client's production site without a
+  conversation first.
+
+- **Pulse's own hardening.** An app that hands clients a report scoring
+  their security posture should pass its own scan, and the first thing a
+  technical client does with a security report is point the tool at the
+  tool. Login and signup are rate limited
+  (`middleware/rateLimit.js`), security headers are set on every response
+  (`middleware/securityHeaders.js`), `x-powered-by` is disabled, and the
+  JSON body limit is 64kb.
+
+  The limiter is written rather than pulled from `express-rate-limit`,
+  same reasoning as `lib/telegram.js` being a plain fetch: the dependency's
+  real value is its store adapters, which don't apply. It's backed by
+  Postgres rather than process memory for a specific reason - Render's
+  free tier restarts this service constantly (it's why the keep-alive
+  feature exists at all), and an in-memory counter resets to zero on every
+  restart, which is a lockout an attacker can simply wait out while being
+  strictest against the honest user who got unlucky with a redeploy. Two
+  buckets are counted independently: client IP (stops one source spraying
+  many accounts) and submitted email (stops a distributed attempt at one
+  account). Only *failures* count, so logging in successfully all day
+  never trips it. It fails **open** if the database is unreachable -
+  a limiter that failed closed would lock everyone out of their own
+  monitoring the moment Postgres hiccuped, and this is defence in depth
+  on top of bcrypt, not the only thing between an attacker and an account.
+
+  The login response is also now identical whether the email exists or
+  not, so the endpoint can't be used to enumerate which addresses have
+  accounts.
+
 
 - **TCP/port checks, a third monitor_type alongside http and synthetic.**
   For anything that isn't a web endpoint - a database, a message queue, a

@@ -3,18 +3,25 @@ import bcrypt from "bcryptjs";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { sendDigest } from "../lib/digest.js";
+import { authRateLimit } from "../middleware/rateLimit.js";
 
 const router = Router();
 
 // Optional lightweight gate so a publicly-deployed instance can't be
 // signed up for by strangers. Leave SIGNUP_CODE unset in dev; set it in
 // production if the backend URL could plausibly be found by anyone else.
-router.post("/signup", async (req, res) => {
+// Signup gets a looser limit than login: it's already gated by
+// SIGNUP_CODE on any instance that needs it, and the thing being
+// prevented here is bulk account creation rather than password guessing.
+router.post("/signup", authRateLimit({ max: 5, windowMinutes: 60 }), async (req, res) => {
   const { email, password, signup_code, alert_email } = req.body;
   if (!email || !password || password.length < 8) {
     return res.status(400).json({ error: "email and an 8+ character password are required" });
   }
   if (process.env.SIGNUP_CODE && signup_code !== process.env.SIGNUP_CODE) {
+    // A wrong signup code counts as a failed attempt, otherwise the code
+    // itself is brute-forceable at whatever rate the network allows.
+    await req.recordAuthFailure();
     return res.status(403).json({ error: "invalid signup code" });
   }
   try {
@@ -33,12 +40,19 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-router.post("/login", async (req, res) => {
+router.post("/login", authRateLimit({ max: 8, windowMinutes: 15 }), async (req, res) => {
   const { email, password } = req.body;
   try {
     const { rows } = await pool.query(`SELECT * FROM users WHERE email = $1`, [email?.trim().toLowerCase()]);
     const user = rows[0];
     if (!user || !(await bcrypt.compare(password || "", user.password_hash))) {
+      // Only failures are counted, so someone logging in successfully all
+      // day never trips the limiter (see middleware/rateLimit.js).
+      await req.recordAuthFailure();
+      // The unauthenticated response is deliberately identical whether
+      // the email exists or not - "invalid email or password" rather than
+      // "no such account" - so this endpoint can't be used to enumerate
+      // which addresses have accounts.
       return res.status(401).json({ error: "invalid email or password" });
     }
     req.session.userId = user.id;

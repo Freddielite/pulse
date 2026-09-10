@@ -1,17 +1,82 @@
 import tls from "node:tls";
 import { lookup as whoisLookup } from "whois";
 
-// Reads the peer certificate's expiry off a plain TLS handshake. This is
-// the actual cert the browser would see, not a WHOIS record, so it's exact.
-export function getSslExpiry(hostname) {
+// Reads the full TLS posture off one handshake: not just the expiry date
+// but the negotiated protocol and cipher, the key, the issuer, the SAN
+// list, and the certificate's SHA-256 fingerprint.
+//
+// All of this was already sitting on the socket the expiry-only version
+// was throwing away. It costs one extra property read each, and it turns
+// "your cert expires on the 4th" into a real answer to "is the TLS on
+// this host actually set up correctly" - including the chain problems
+// that work in Chrome (which fetches missing intermediates) and break
+// curl, Android and every server-to-server client.
+//
+// The fingerprint is the interesting one: stored and compared over time,
+// an unexpected change is the signal for a hijacked DNS record, a
+// compromised CDN account, or a certificate reissued by someone who
+// shouldn't have been able to.
+export function getTlsPosture(hostname, port = 443) {
   return new Promise((resolve, reject) => {
     const socket = tls.connect(
-      { host: hostname, port: 443, servername: hostname, timeout: 10000 },
+      {
+        host: hostname,
+        port,
+        servername: hostname,
+        timeout: 10000,
+        // Deliberately does NOT reject unauthorized certs: a
+        // self-signed or expired certificate is exactly the kind of
+        // thing this is meant to *report*, and refusing the connection
+        // would turn the most interesting findings into a bare
+        // "handshake failed" with no detail.
+        rejectUnauthorized: false,
+      },
       () => {
-        const cert = socket.getPeerCertificate();
+        // true = include the full chain via .issuerCertificate links.
+        const cert = socket.getPeerCertificate(true);
+        const protocol = socket.getProtocol();
+        const cipher = socket.getCipher();
+        const authorized = socket.authorized;
+        const authorizationError = socket.authorizationError;
         socket.end();
+
         if (!cert || !cert.valid_to) return reject(new Error("no certificate returned"));
-        resolve(new Date(cert.valid_to));
+
+        // Walk the chain to count how many certs the server actually
+        // sent. A server that presents only its leaf is the classic
+        // "works in my browser, fails everywhere else" misconfiguration.
+        let chainLength = 0;
+        let node = cert;
+        const seen = new Set();
+        while (node && !seen.has(node.fingerprint256)) {
+          seen.add(node.fingerprint256);
+          chainLength += 1;
+          node = node.issuerCertificate;
+        }
+
+        const altNames = (cert.subjectaltname || "")
+          .split(",")
+          .map((entry) => entry.trim().replace(/^DNS:/i, ""))
+          .filter(Boolean);
+
+        resolve({
+          expiresAt: new Date(cert.valid_to),
+          validFrom: new Date(cert.valid_from),
+          fingerprint256: cert.fingerprint256 || null,
+          serialNumber: cert.serialNumber || null,
+          subject: cert.subject?.CN || null,
+          issuer: cert.issuer?.O || cert.issuer?.CN || null,
+          altNames,
+          hostnameMatches: matchesHostname(hostname, cert.subject?.CN, altNames),
+          selfSigned: !!cert.issuerCertificate && cert.issuerCertificate.fingerprint256 === cert.fingerprint256,
+          chainLength,
+          protocol,
+          cipherName: cipher?.name || null,
+          keyBits: cert.bits ?? null,
+          keyType: cert.asn1Curve ? `ECDSA (${cert.asn1Curve})` : cert.modulus ? "RSA" : null,
+          authorized,
+          authorizationError: authorizationError ? String(authorizationError) : null,
+        });
       }
     );
     socket.on("error", reject);
@@ -20,6 +85,90 @@ export function getSslExpiry(hostname) {
       reject(new Error("TLS handshake timed out"));
     });
   });
+}
+
+// Wildcard-aware hostname matching, the same rule browsers apply: a
+// leading *. matches exactly one label, so *.example.com covers
+// api.example.com but not a.b.example.com and not example.com itself.
+function matchesHostname(hostname, commonName, altNames) {
+  const candidates = [...altNames];
+  if (commonName) candidates.push(commonName);
+  return candidates.some((candidate) => {
+    if (!candidate) return false;
+    const name = candidate.toLowerCase();
+    const host = hostname.toLowerCase();
+    if (name === host) return true;
+    if (name.startsWith("*.")) {
+      const suffix = name.slice(1); // ".example.com"
+      if (!host.endsWith(suffix)) return false;
+      const label = host.slice(0, host.length - suffix.length);
+      return label.length > 0 && !label.includes(".");
+    }
+    return false;
+  });
+}
+
+// Kept as the narrow original signature because the cert sweep, the
+// digest, and the expiry alert all only ever wanted the one date.
+export async function getSslExpiry(hostname) {
+  const posture = await getTlsPosture(hostname);
+  return posture.expiresAt;
+}
+
+// Turns a posture read into scored findings, so TLS configuration shows
+// up in the same security report as everything else rather than being a
+// separate panel the user has to interpret themselves.
+export function tlsFindings(posture) {
+  const findings = [];
+  const push = (check, pass, detail, severity) => findings.push({ check, pass, detail, severity, category: "transport", remediation: null });
+
+  const weakProtocol = posture.protocol && /TLSv1(\.[01])?$/.test(posture.protocol);
+  push(
+    "Modern TLS protocol",
+    !weakProtocol,
+    weakProtocol
+      ? `The server negotiated ${posture.protocol}. TLS 1.0 and 1.1 are deprecated, are rejected by current browsers, and fail PCI DSS. Enable TLS 1.2 and 1.3 and disable everything below.`
+      : `Negotiated ${posture.protocol || "an unknown protocol"}${posture.cipherName ? ` with ${posture.cipherName}` : ""}.`,
+    weakProtocol ? "high" : "high"
+  );
+
+  push(
+    "Certificate matches hostname",
+    posture.hostnameMatches,
+    posture.hostnameMatches
+      ? "The certificate covers the hostname being monitored."
+      : `The certificate's subject (${posture.subject || "unknown"}) and SAN list don't cover this hostname. Browsers will show a name-mismatch warning.`,
+    "critical"
+  );
+
+  push(
+    "Certificate chain is complete",
+    posture.chainLength > 1 || posture.selfSigned === false,
+    posture.chainLength > 1
+      ? `The server sent ${posture.chainLength} certificates, so the chain to a trusted root is intact.`
+      : "The server sent only its leaf certificate, with no intermediates. Browsers usually fetch the missing intermediate themselves and it looks fine - but curl, Java, Android and most server-to-server clients will fail to verify it.",
+    "medium"
+  );
+
+  push(
+    "Certificate is trusted",
+    posture.authorized,
+    posture.authorized
+      ? `Issued by ${posture.issuer || "a trusted CA"} and validates against the system trust store.`
+      : `The certificate does not validate: ${posture.authorizationError || "unknown reason"}.`,
+    "critical"
+  );
+
+  if (posture.keyBits && posture.keyType === "RSA") {
+    push(
+      "Key size is adequate",
+      posture.keyBits >= 2048,
+      posture.keyBits >= 2048 ? `RSA ${posture.keyBits}-bit key.` : `RSA key is only ${posture.keyBits} bits; 2048 is the modern minimum.`,
+      "high"
+    );
+  }
+
+  return findings;
 }
 
 // Registrar WHOIS records have no standard format, so this is deliberately

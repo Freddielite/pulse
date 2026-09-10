@@ -12,6 +12,7 @@ import telegramRouter from "./routes/telegram.js";
 import tokensRouter from "./routes/tokens.js";
 import statusPagesRouter from "./routes/statusPages.js";
 import publicRouter from "./routes/public.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
 
 const app = express();
 
@@ -20,9 +21,21 @@ const app = express();
 // in production, silently breaking login.
 app.set("trust proxy", 1);
 
+// Express advertises itself in X-Powered-By by default, which is exactly
+// the version-disclosure finding lib/scanner.js reports on other people's
+// sites.
+app.disable("x-powered-by");
+
 const corsOrigin = process.env.CORS_ORIGIN || "*";
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json());
+// Applied before every route, including the public and error paths, so
+// there's no response shape that escapes them.
+app.use(securityHeaders());
+// A body limit, because the default (100kb) is generous for an API whose
+// largest legitimate payload is a monitor with a handful of synthetic
+// steps, and an unbounded parse is free memory pressure on a free-tier
+// box.
+app.use(express.json({ limit: "64kb" }));
 
 const PgSession = connectPgSimple(session);
 app.use(

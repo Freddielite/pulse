@@ -52,7 +52,21 @@ export const getMonitorIncidents = (id) => apiFetch(`/monitors/${id}/incidents`)
 export const getMonitorUptime = (id) => apiFetch(`/monitors/${id}/uptime`);
 export const getMonitorDailyUptime = (id, days = 90) => apiFetch(`/monitors/${id}/daily-uptime?days=${days}`);
 export const getMonitorSecurity = (id) => apiFetch(`/monitors/${id}/security`);
-export const runSecurityScan = (id) => apiFetch(`/monitors/${id}/security/run`, { method: "POST", timeoutMs: 20000 });
+// A full scan is up to ~32 requests against the target, several of them
+// against endpoints that legitimately hang, so it needs a much longer
+// client timeout than a normal read.
+export const runSecurityScan = (id) => apiFetch(`/monitors/${id}/security/run`, { method: "POST", timeoutMs: 60000 });
+export const getSecurityHistory = (id, limit = 60) => apiFetch(`/monitors/${id}/security/history?limit=${limit}`);
+export const getSecurityEvents = (id, limit = 50) => apiFetch(`/monitors/${id}/security/events?limit=${limit}`);
+export const acknowledgeSecurityEvent = (id, eventId) =>
+  apiFetch(`/monitors/${id}/security/events/${eventId}/acknowledge`, { method: "POST" });
+
+export const getMonitorTls = (id) => apiFetch(`/monitors/${id}/tls`);
+export const getMonitorDns = (id) => apiFetch(`/monitors/${id}/dns`);
+export const runDnsCheck = (id) => apiFetch(`/monitors/${id}/dns/run`, { method: "POST", timeoutMs: 30000 });
+export const getMonitorCertificates = (id) => apiFetch(`/monitors/${id}/certificates`);
+// crt.sh is regularly slow enough to need most of a minute.
+export const runCertificateCheck = (id) => apiFetch(`/monitors/${id}/certificates/run`, { method: "POST", timeoutMs: 60000 });
 
 export const getVapidPublicKey = () => apiFetch("/push/vapid-public-key");
 export const subscribePush = (subscription) => apiFetch("/push/subscribe", { method: "POST", body: JSON.stringify(subscription) });

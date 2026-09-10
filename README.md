@@ -29,16 +29,61 @@ about often enough that they never get the chance.
   deployed over real HTTPS (browsers block it on plain HTTP).
 - **Incident history and uptime heatmap** - every outage is logged with
   duration, plus a day-by-day heatmap per monitor going back 90 days.
-- **Security scanning** - a passive, non-destructive scan per monitor:
-  HTTPS enforcement, six common security headers, server-version
-  disclosure, and four commonly-exposed sensitive paths (`.env`,
-  `.git/config`, etc.). Runs automatically once a day per monitor, or
-  on demand with "Rescan now." Fully private - there's no public
-  endpoint for it, only the authenticated owner of a monitor can see its
-  results.
+- **Security scanning** - a passive, non-destructive scan per monitor,
+  around 30 checks: HTTPS enforcement and HTTP-to-HTTPS redirect, six
+  security headers graded on their *values* (a CSP of `default-src *`
+  and an HSTS of `max-age=1` fail, rather than passing a presence
+  check), cookie flags, version disclosure, third-party script
+  inventory with SRI, mixed content, CORS reflection, TRACE, GraphQL
+  introspection, and 17 commonly-exposed sensitive paths. Runs
+  automatically once a day per monitor, or on demand with "Rescan now."
+  Fully private - there's no public endpoint for it, only the
+  authenticated owner of a monitor can see its results.
+- **Severity-weighted scoring** - findings are critical/high/medium/low,
+  and the score is weighted accordingly, so an exposed `.env` and a
+  missing `Permissions-Policy` don't move the number by the same amount.
+  Any critical failure forces the letter grade to F regardless of what
+  else passes.
+- **Security regression alerts** - scans are kept as history, not
+  overwritten, and every scan is diffed against the previous one. A
+  check going from passing to failing alerts ("HSTS disappeared after
+  Friday's deploy"). A check that only exists in the newer scan is never
+  reported as a regression, so upgrading Pulse itself can't fire a false
+  alarm.
+- **Security timeline** - one chronological record per monitor of
+  everything that changed: regressions, certificate swaps, DNS drift,
+  new certificates in the CT logs, an endpoint that stopped requiring
+  auth. Acknowledging an event keeps it in the record rather than
+  deleting it.
+- **Full TLS posture** - the same handshake that reads expiry now also
+  reports protocol and cipher (flagging TLS 1.0/1.1), key size,
+  hostname/SAN match, chain completeness (the "works in Chrome, fails in
+  curl" misconfiguration), trust status, and the certificate's SHA-256
+  fingerprint. An unexpected fingerprint change alerts - that's the
+  signal for a hijacked DNS record, a compromised CDN account, or a
+  mis-issued certificate, none of which make the site look any different
+  from the outside.
+- **DNS posture and drift** - snapshots A/AAAA/CNAME/MX/NS/TXT/CAA every
+  few hours and alerts when they change unexpectedly, grades SPF, DMARC
+  and CAA, and detects dangling CNAMEs pointing at deprovisioned
+  platforms (subdomain takeover). A lookup that *fails* is reported as
+  unknown, never as "not configured".
+- **Certificate Transparency monitoring** - watches the public CT logs
+  for certificates issued for your domain, alerting on issuance from a
+  CA that's never issued for you before. Doubles as subdomain discovery:
+  every hostname anyone ever got a certificate for, with a one-click
+  "monitor this too" on the ones you aren't watching yet.
+- **Auth-required assertions** - opt in per monitor and Pulse sends the
+  same request *without* its credential and fails if the server answers
+  it anyway. This is what catches an endpoint shipped with its auth
+  middleware missing: every other check goes green for that deploy,
+  because the endpoint does respond, quickly, with valid data, to
+  everyone.
 - **Downloadable security reports** - export a monitor's latest scan as a
-  plain-text report (score, findings, advice) for your own records or to
-  hand to a client.
+  plain-text report led by the grade and the failures, each with its
+  severity and the exact configuration change that fixes it (nginx,
+  Express, Vercel, Netlify or Cloudflare), plus TLS details and recent
+  unacknowledged changes.
 - **Multi-step (synthetic) checks** - a plain-HTTP request sequence
   (login, follow the session, hit a gated page, assert on the result)
   with cookies and extracted variables carried from one step to the

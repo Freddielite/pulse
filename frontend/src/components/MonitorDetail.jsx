@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare } from "../api.js";
+import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare, getSecurityHistory, getSecurityEvents, acknowledgeSecurityEvent, getMonitorTls, getMonitorDns, runDnsCheck, getMonitorCertificates, runCertificateCheck, createMonitor } from "../api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
 import ResponseTimeChart from "./ResponseTimeChart.jsx";
+import SecurityScanPanel from "./SecurityScanPanel.jsx";
+import SecurityTimeline from "./SecurityTimeline.jsx";
+import { TlsPanel, DnsPanel, CertificatesPanel } from "./DomainPanels.jsx";
 
 const SNOOZE_OPTIONS = [
   { label: "15m", minutes: 15 },
@@ -36,7 +39,14 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   const [uptime, setUptime] = useState(null);
   const [dailyUptime, setDailyUptime] = useState([]);
   const [security, setSecurity] = useState(null);
+  const [securityHistory, setSecurityHistory] = useState([]);
+  const [securityEvents, setSecurityEvents] = useState([]);
+  const [tls, setTls] = useState(null);
+  const [dns, setDns] = useState(null);
+  const [certificates, setCertificates] = useState(null);
   const [scanning, setScanning] = useState(false);
+  const [dnsRefreshing, setDnsRefreshing] = useState(false);
+  const [ctRefreshing, setCtRefreshing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
@@ -49,12 +59,21 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   const snoozed = !!monitor.snoozed_until && new Date(monitor.snoozed_until).getTime() > Date.now();
 
   async function load(ignore) {
-    const [c, i, u, d, s] = await Promise.all([
+    // A TCP monitor has no HTTP surface to scan and no certificate or DNS
+    // panel rendered for it, so those reads are skipped rather than
+    // fetched and discarded.
+    const httpish = monitor.monitor_type !== "tcp";
+    const [c, i, u, d, s, sh, se, t, dn, ct] = await Promise.all([
       getMonitorChecks(monitor.id),
       getMonitorIncidents(monitor.id),
       getMonitorUptime(monitor.id),
       getMonitorDailyUptime(monitor.id),
       getMonitorSecurity(monitor.id),
+      httpish ? getSecurityHistory(monitor.id) : Promise.resolve([]),
+      getSecurityEvents(monitor.id),
+      httpish ? getMonitorTls(monitor.id) : Promise.resolve(null),
+      httpish ? getMonitorDns(monitor.id) : Promise.resolve(null),
+      httpish ? getMonitorCertificates(monitor.id) : Promise.resolve(null),
     ]);
     // Guards against a slow response from a monitor you've since navigated
     // away from landing after the fact and overwriting whatever's actually
@@ -67,6 +86,11 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
     setUptime(u);
     setDailyUptime(d);
     setSecurity(s);
+    setSecurityHistory(sh || []);
+    setSecurityEvents(se || []);
+    setTls(t);
+    setDns(dn);
+    setCertificates(ct);
   }
 
   useEffect(() => {
@@ -120,11 +144,75 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
     try {
       const result = await runSecurityScan(monitor.id);
       setSecurity(result);
-      toast(`Scan complete: ${result.score}/100.`);
+      // A scan can produce regression events, so the timeline and the
+      // trend both need re-reading - not just the scan itself.
+      const [history, events] = await Promise.all([getSecurityHistory(monitor.id), getSecurityEvents(monitor.id)]);
+      setSecurityHistory(history || []);
+      setSecurityEvents(events || []);
+      toast(`Scan complete: ${result.score}/100 (${result.grade}).`);
     } catch (err) {
       toast(err.message, "error");
     } finally {
       setScanning(false);
+    }
+  }
+
+  async function handleAcknowledgeEvent(eventId) {
+    try {
+      const updated = await acknowledgeSecurityEvent(monitor.id, eventId);
+      setSecurityEvents((events) => events.map((event) => (event.id === updated.id ? updated : event)));
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function handleRefreshDns() {
+    setDnsRefreshing(true);
+    try {
+      await runDnsCheck(monitor.id);
+      const [nextDns, events] = await Promise.all([getMonitorDns(monitor.id), getSecurityEvents(monitor.id)]);
+      setDns(nextDns);
+      setSecurityEvents(events || []);
+      toast("DNS records refreshed.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setDnsRefreshing(false);
+    }
+  }
+
+  async function handleRefreshCertificates() {
+    setCtRefreshing(true);
+    try {
+      await runCertificateCheck(monitor.id);
+      const [next, events] = await Promise.all([getMonitorCertificates(monitor.id), getSecurityEvents(monitor.id)]);
+      setCertificates(next);
+      setSecurityEvents(events || []);
+      toast("Certificate transparency logs checked.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setCtRefreshing(false);
+    }
+  }
+
+  // One-click "monitor this too" on a subdomain discovered in the CT
+  // logs. Inherits this monitor's group and interval, since a subdomain
+  // found this way almost always belongs with the monitor that found it.
+  async function handleMonitorSubdomain(hostname) {
+    try {
+      await createMonitor({
+        name: hostname,
+        url: `https://${hostname}`,
+        group_name: monitor.group_name || null,
+        check_interval_min: monitor.check_interval_min,
+      });
+      const next = await getMonitorCertificates(monitor.id);
+      setCertificates(next);
+      onChanged();
+      toast(`Now monitoring ${hostname}.`);
+    } catch (err) {
+      toast(err.message, "error");
     }
   }
 
@@ -177,19 +265,81 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
 
   function handleDownloadReport() {
     if (!security) return;
+
+    const findings = security.findings || [];
+    const failures = findings.filter((finding) => !finding.pass);
+    const passes = findings.filter((finding) => finding.pass);
+    const summary = security.summary || {};
+    const posture = tls?.tls_posture;
+
+    // This is the artifact a client actually reads, so it leads with the
+    // grade and the failures rather than dumping every check in scan
+    // order. Each failure carries its severity and, where there is one,
+    // the exact configuration change that fixes it - a report that says
+    // "add a Content-Security-Policy header" gets filed; one that says
+    // what to paste into vercel.json gets acted on.
     const lines = [
-      `Security scan report`,
-      `Monitor: ${monitor.name}`,
-      `URL: ${monitor.url}`,
-      `Score: ${security.score}/100`,
-      `Scanned: ${formatDateTime(security.scanned_at)}`,
+      `SECURITY REPORT`,
+      `${monitor.name} - ${monitor.url}`,
+      `Generated ${new Date().toLocaleString()}`,
+      `Scan taken ${formatDateTime(security.scanned_at)}`,
       ``,
-      `Findings`,
-      `--------`,
-      ...security.findings.map((f) => `[${f.pass ? "PASS" : "FAIL"}] ${f.check}\n    ${f.detail}`),
+      `OVERALL: ${security.grade || "-"} (${security.score}/100)`,
+      Object.entries(summary)
+        .filter(([, count]) => count > 0)
+        .map(([severity, count]) => `${count} ${severity}`)
+        .join(", ") || `No failing checks.`,
       ``,
-      `Generated by Pulse`,
     ];
+
+    if (posture) {
+      lines.push(
+        `TLS`,
+        `---`,
+        `Issuer: ${posture.issuer || "unknown"}`,
+        `Protocol: ${posture.protocol || "unknown"}${posture.cipherName ? ` (${posture.cipherName})` : ""}`,
+        `Key: ${posture.keyType || "unknown"}${posture.keyBits ? ` ${posture.keyBits}-bit` : ""}`,
+        `Chain: ${posture.chainLength} certificate(s) sent`,
+        `Expires: ${monitor.ssl_expires_at ? formatDate(monitor.ssl_expires_at) : "unknown"}`,
+        `SHA-256: ${posture.fingerprint256 || "unknown"}`,
+        ``
+      );
+    }
+
+    if (failures.length > 0) {
+      lines.push(`ISSUES FOUND (${failures.length})`, `${"=".repeat(24)}`, ``);
+      failures.forEach((finding, index) => {
+        lines.push(`${index + 1}. [${String(finding.severity || "medium").toUpperCase()}] ${finding.check}`);
+        lines.push(`   ${finding.detail}`);
+        if (finding.remediation) {
+          const fix = finding.remediation.nginx || finding.remediation.express;
+          if (fix) lines.push(`   Fix (nginx): ${fix}`);
+          if (finding.remediation.vercel) lines.push(`   Fix (Vercel): ${finding.remediation.vercel.replace(/\n/g, " ")}`);
+        }
+        lines.push(``);
+      });
+    } else {
+      lines.push(`No failing checks.`, ``);
+    }
+
+    const openEvents = (securityEvents || []).filter((event) => !event.acknowledged);
+    if (openEvents.length > 0) {
+      lines.push(`RECENT CHANGES (${openEvents.length} unacknowledged)`, `${"=".repeat(24)}`, ``);
+      for (const event of openEvents) {
+        lines.push(`- [${String(event.severity).toUpperCase()}] ${new Date(event.created_at).toLocaleString()} - ${event.title}`);
+        if (event.detail) lines.push(`  ${event.detail}`);
+      }
+      lines.push(``);
+    }
+
+    lines.push(`PASSING CHECKS (${passes.length})`, `${"=".repeat(24)}`, ...passes.map((finding) => `[PASS] ${finding.check}`), ``);
+    lines.push(
+      `Scope note: every check in this report is a passive, outside-in observation.`,
+      `Nothing was exploited, submitted, or authenticated against.`,
+      ``,
+      `Generated by Pulse`
+    );
+
     const blob = new Blob([lines.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -288,21 +438,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
 
       <ResponseTimeChart checks={checks} />
 
-      {monitor.monitor_type !== "tcp" && (
-        <>
-          <div className="pl-section-label">Certificate &amp; domain</div>
-          <div className="pl-panel">
-            <div className="pl-expiry-row">
-              <span className="pl-expiry-row__label">SSL certificate expires</span>
-              <span>{monitor.ssl_expires_at ? formatDate(monitor.ssl_expires_at) : "Not checked yet"}</span>
-            </div>
-            <div className="pl-expiry-row">
-              <span className="pl-expiry-row__label">Domain registration expires</span>
-              <span>{monitor.domain_expires_at ? formatDate(monitor.domain_expires_at) : "Unknown (best-effort lookup)"}</span>
-            </div>
-          </div>
-        </>
-      )}
+      {monitor.monitor_type !== "tcp" && <TlsPanel monitor={monitor} tls={tls} />}
 
       {monitor.content_diff_enabled && (
         <>
@@ -316,70 +452,62 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
         </>
       )}
 
-      {monitor.monitor_type !== "tcp" && (
+      {monitor.auth_probe_enabled && monitor.auth_probe_status && (
         <>
-          <div className="pl-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 8px" }}>
-            <span>Security scan</span>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {security && (
-                <button
-                  type="button"
-                  className="pl-btn pl-btn--ghost"
-                  style={{ fontSize: 11, padding: "3px 10px" }}
-                  onClick={handleDownloadReport}
-                >
-                  Download report
-                </button>
-              )}
-              <button
-                type="button"
-                className="pl-btn pl-btn--ghost"
-                style={{ fontSize: 11, padding: "3px 10px" }}
-                onClick={handleRunScan}
-                disabled={scanning}
-              >
-                {scanning ? "Scanning…" : "Rescan now"}
-              </button>
-            </div>
-          </div>
+          <div className="pl-section-label">Authentication assertion</div>
           <div className="pl-panel">
-            {!security ? (
-              <div style={{ color: "var(--ink-dim)", fontSize: 13 }}>
-                Not scanned yet. Runs automatically once a day, or hit "Rescan now."
+            <div className="pl-expiry-row">
+              <span className="pl-expiry-row__label">Unauthenticated requests are refused</span>
+              <span
+                style={{
+                  color:
+                    monitor.auth_probe_status === "pass"
+                      ? "var(--signal)"
+                      : monitor.auth_probe_status === "fail"
+                        ? "var(--alert)"
+                        : "var(--ink-dim)",
+                }}
+              >
+                {monitor.auth_probe_status === "pass"
+                  ? `Yes (expects ${monitor.auth_probe_expect})`
+                  : monitor.auth_probe_status === "fail"
+                    ? "No - this endpoint is answering anonymous callers"
+                    : "Couldn't determine"}
+              </span>
+            </div>
+            {monitor.auth_probe_checked_at && (
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>
+                Checked {formatDateTime(monitor.auth_probe_checked_at)}, on every check cycle.
               </div>
-            ) : (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                  <span
-                    className={`pl-badge ${
-                      security.score >= 90 ? "pl-badge--signal" : security.score >= 70 ? "pl-badge--amber" : "pl-badge--amber"
-                    }`}
-                    style={security.score < 70 ? { background: "var(--alert-dim)", color: "var(--alert)" } : undefined}
-                  >
-                    {security.score}/100
-                  </span>
-                  <span style={{ color: "var(--ink-dim)", fontSize: 12 }}>
-                    Last scanned {formatDateTime(security.scanned_at)}
-                  </span>
-                </div>
-                {security.findings.map((f, i) => (
-                  <div key={i} className="pl-finding-row" style={{ borderTop: i === 0 ? "none" : undefined }}>
-                    <div className="pl-finding-row__text">
-                      <div style={{ color: f.pass ? "var(--ink)" : "var(--alert)" }}>{f.check}</div>
-                      <div className="pl-finding-row__detail">{f.detail}</div>
-                    </div>
-                    <div
-                      className="pl-finding-row__result"
-                      style={{ color: f.pass ? "var(--signal)" : "var(--alert)" }}
-                    >
-                      {f.pass ? "Pass" : "Fail"}
-                    </div>
-                  </div>
-                ))}
-              </>
             )}
           </div>
         </>
+      )}
+
+      {monitor.monitor_type !== "tcp" && (
+        <SecurityScanPanel
+          monitor={monitor}
+          security={security}
+          history={securityHistory}
+          scanning={scanning}
+          onRescan={handleRunScan}
+          onDownloadReport={handleDownloadReport}
+        />
+      )}
+
+      <SecurityTimeline events={securityEvents} onAcknowledge={handleAcknowledgeEvent} />
+
+      {monitor.monitor_type !== "tcp" && (
+        <DnsPanel dns={dns} onRefresh={handleRefreshDns} refreshing={dnsRefreshing} />
+      )}
+
+      {monitor.monitor_type !== "tcp" && monitor.ct_enabled !== false && (
+        <CertificatesPanel
+          data={certificates}
+          onRefresh={handleRefreshCertificates}
+          refreshing={ctRefreshing}
+          onMonitorSubdomain={handleMonitorSubdomain}
+        />
       )}
 
       <div className="pl-section-label">Share link</div>

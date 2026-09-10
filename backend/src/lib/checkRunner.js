@@ -2,11 +2,15 @@ import { pool } from "../db.js";
 import { runHttpCheck, CONTENT_HASH_VERSION } from "./httpCheck.js";
 import { runSyntheticCheck } from "./syntheticCheck.js";
 import { runTcpCheck } from "./tcpCheck.js";
-import { getSslExpiry, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
+import { getTlsPosture, getDomainExpiry, hostnameFromUrl } from "./certCheck.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
 import { sendTelegramMessage, resolveChatId } from "./telegram.js";
 import { scanSite } from "./scanner.js";
+import { runAuthProbe } from "./authProbe.js";
+import { snapshotDns, diffSnapshots, checkDanglingCname, registrableRoot } from "./dnsCheck.js";
+import { fetchCtCertificates, recentlyIssued, normalizeIssuer } from "./ctLogs.js";
+import { recordSecurityEvent, diffScans } from "./securityEvents.js";
 
 // How often the (best-effort, rate-limited) cert/domain check runs per
 // monitor. Far coarser than the uptime check: a handshake + WHOIS lookup
@@ -22,6 +26,15 @@ const MAX_CERT_CHECKS_PER_RUN = 5;
 // same per-run cap rather than every cron tick.
 const SECURITY_SCAN_INTERVAL_HOURS = 24;
 const MAX_SECURITY_SCANS_PER_RUN = 5;
+// DNS is cheap (a handful of UDP lookups, no HTTP), so it runs far more
+// often than the scan sweep - drift is the one signal here where the gap
+// between "it changed" and "you found out" is the whole value.
+const DNS_CHECK_INTERVAL_HOURS = 6;
+const MAX_DNS_CHECKS_PER_RUN = 10;
+// CT is the only sweep that queries a third party (crt.sh), so it's the
+// most conservative: once a day per monitor, few per run.
+const CT_CHECK_INTERVAL_HOURS = 24;
+const MAX_CT_CHECKS_PER_RUN = 3;
 // How often a monitor that's still down gets another alert, instead of
 // staying silent after the initial one. An hour balances "you'd actually
 // want to know it's still broken" against not turning a multi-hour outage
@@ -199,6 +212,49 @@ async function checkOneMonitor(monitor) {
         alerted = true;
       }
     }
+
+    // Auth-negative assertion. Runs on the passing branch only, and only
+    // for monitors that opted in: if the endpoint is already down, "does
+    // it still refuse anonymous callers" is both unanswerable and beside
+    // the point.
+    //
+    // Deliberately on the normal check cadence rather than the daily
+    // security sweep. An endpoint that lost its authentication is the
+    // single most expensive thing this app can detect, and finding out
+    // up to 24 hours later is not meaningfully better than not finding
+    // out - so it gets the same latency as a downtime check, at the cost
+    // of one extra request per interval for the monitors that want it.
+    if (monitor.auth_probe_enabled && monitor.monitor_type === "http") {
+      const probe = await runAuthProbe(monitor);
+      const previous = monitor.auth_probe_status;
+
+      await pool.query(
+        `UPDATE monitors SET auth_probe_status = $2, auth_probe_checked_at = now() WHERE id = $1`,
+        [monitor.id, probe.verdict]
+      );
+
+      // Only a transition notifies, and an inconclusive result (network
+      // failure during the probe) never does - it isn't evidence either
+      // way, and treating it as a failure would page someone every time
+      // their wifi dropped.
+      if (probe.verdict === "fail" && previous !== "fail") {
+        await recordSecurityEvent(monitor, {
+          kind: "auth_probe_failed",
+          severity: "critical",
+          title: "endpoint no longer requires authentication",
+          detail: probe.detail,
+          data: { statusCode: probe.statusCode, expected: monitor.auth_probe_expect },
+        });
+        alerted = true;
+      } else if (probe.verdict === "pass" && previous === "fail") {
+        await recordSecurityEvent(monitor, {
+          kind: "auth_probe_recovered",
+          severity: "info",
+          title: "endpoint requires authentication again",
+          detail: probe.detail,
+        });
+      }
+    }
   }
 
   return { status: result.status, alerted };
@@ -229,11 +285,16 @@ export async function runCertSweep({ userId = null, limit = MAX_CERT_CHECKS_PER_
     const hostname = hostnameFromUrl(monitor.url);
     let sslExpiry = null;
     let domainExpiry = null;
+    let posture = null;
     let error = null;
 
     if (hostname) {
       try {
-        sslExpiry = await getSslExpiry(hostname);
+        // One handshake now yields the whole picture (protocol, cipher,
+        // chain, SANs, fingerprint), not just the expiry date - see
+        // getTlsPosture in certCheck.js.
+        posture = await getTlsPosture(hostname);
+        sslExpiry = posture.expiresAt;
       } catch (err) {
         error = `SSL: ${err.message}`;
       }
@@ -245,11 +306,68 @@ export async function runCertSweep({ userId = null, limit = MAX_CERT_CHECKS_PER_
     }
 
     await pool.query(
-      `UPDATE monitors SET ssl_expires_at = $2, domain_expires_at = $3, cert_checked_at = now(), cert_check_error = $4
+      `UPDATE monitors SET ssl_expires_at = $2, domain_expires_at = $3, cert_checked_at = now(), cert_check_error = $4,
+                           tls_posture = $5, tls_fingerprint = COALESCE($6, tls_fingerprint)
        WHERE id = $1`,
-      [monitor.id, sslExpiry, domainExpiry, error]
+      [monitor.id, sslExpiry, domainExpiry, error, posture ? JSON.stringify(posture) : null, posture?.fingerprint256 ?? null]
     );
     certChecks += 1;
+
+    // Certificate fingerprint change detection.
+    //
+    // Same baseline-then-compare shape as content-diff monitoring: the
+    // first fingerprint seen is just the baseline, never an alert. After
+    // that, a change means the certificate this hostname presents is not
+    // the one it presented before - which is a routine renewal most of
+    // the time, and a hijacked DNS record, a compromised CDN account, or
+    // a mis-issued certificate the rest of the time. Pulse can't tell
+    // those apart from the outside, and shouldn't pretend to: it reports
+    // what changed and lets the person who knows their own renewal
+    // schedule make the call.
+    if (posture?.fingerprint256 && monitor.tls_fingerprint && monitor.tls_fingerprint !== posture.fingerprint256) {
+      const previousIssuer = monitor.tls_posture?.issuer;
+      const sameIssuer = previousIssuer && posture.issuer && normalizeIssuer(previousIssuer) === normalizeIssuer(posture.issuer);
+      await recordSecurityEvent(monitor, {
+        kind: "tls_fingerprint_changed",
+        severity: sameIssuer ? "medium" : "high",
+        title: sameIssuer ? "TLS certificate was replaced" : "TLS certificate was replaced by a different issuer",
+        detail: sameIssuer
+          ? `The certificate changed but was issued by the same CA (${posture.issuer}), which is what a normal renewal looks like. Valid until ${posture.expiresAt.toDateString()}.`
+          : `The certificate changed and the issuer changed too: it was ${previousIssuer || "unknown"}, now ${posture.issuer || "unknown"}. If you didn't move CAs or change hosting provider, this is worth checking immediately - it's what a hijacked DNS record or a compromised CDN account looks like from the outside.`,
+        data: {
+          previousFingerprint: monitor.tls_fingerprint,
+          fingerprint: posture.fingerprint256,
+          previousIssuer,
+          issuer: posture.issuer,
+          validFrom: posture.validFrom,
+          validTo: posture.expiresAt,
+        },
+        dedupeKey: posture.fingerprint256,
+      });
+    }
+
+    // Posture problems that aren't about expiry at all: a name mismatch,
+    // an untrusted chain, a deprecated protocol version.
+    if (posture) {
+      if (!posture.hostnameMatches) {
+        await recordSecurityEvent(monitor, {
+          kind: "tls_posture",
+          severity: "critical",
+          title: "TLS certificate doesn't cover this hostname",
+          detail: `The certificate served for ${hostname} is issued to ${posture.subject || "an unknown subject"} (SANs: ${posture.altNames.slice(0, 5).join(", ") || "none"}). Browsers will show a name-mismatch warning.`,
+          dedupeKey: `hostname-mismatch:${posture.fingerprint256}`,
+        });
+      }
+      if (posture.protocol && /TLSv1(\.[01])?$/.test(posture.protocol)) {
+        await recordSecurityEvent(monitor, {
+          kind: "tls_posture",
+          severity: "high",
+          title: `server negotiated ${posture.protocol}`,
+          detail: `${posture.protocol} is deprecated, rejected by current browsers, and fails PCI DSS. Enable TLS 1.2 and 1.3 and disable everything below.`,
+          dedupeKey: `weak-protocol:${posture.protocol}`,
+        });
+      }
+    }
 
     // A cert or domain expiring soon is worth a proactive nudge even
     // though nothing is "down" yet. This is the whole point of tracking
@@ -294,16 +412,262 @@ export async function runSecuritySweep({ userId = null, limit = MAX_SECURITY_SCA
 
   let scansRun = 0;
   for (const monitor of scanDue) {
-    const result = await scanSite(monitor.url);
-    await pool.query(
-      `INSERT INTO security_scans (monitor_id, score, findings) VALUES ($1, $2, $3)`,
-      [monitor.id, result.score, JSON.stringify(result.findings)]
-    );
-    await pool.query(`UPDATE monitors SET security_scanned_at = now() WHERE id = $1`, [monitor.id]);
+    await scanAndRecord(monitor);
     scansRun += 1;
   }
 
   return scansRun;
+}
+
+// Runs one scan, stores it, and reports what changed relative to the
+// previous one. Shared by the sweep above and the manual "Rescan now"
+// route, so an on-demand scan produces exactly the same events an
+// automatic one would - there's no second code path that quietly skips
+// the diffing.
+export async function scanAndRecord(monitor) {
+  const { rows: previousRows } = await pool.query(
+    `SELECT findings FROM security_scans WHERE monitor_id = $1 ORDER BY scanned_at DESC LIMIT 1`,
+    [monitor.id]
+  );
+  const previousFindings = previousRows[0]?.findings || null;
+
+  const result = await scanSite(monitor.url, {
+    authHeaderName: monitor.auth_header_name,
+    authHeaderValue: monitor.auth_header_value,
+  });
+
+  const { rows } = await pool.query(
+    `INSERT INTO security_scans (monitor_id, score, grade, findings, summary, meta)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [
+      monitor.id,
+      result.score,
+      result.grade,
+      JSON.stringify(result.findings),
+      JSON.stringify(result.summary),
+      JSON.stringify(result.meta),
+    ]
+  );
+
+  await pool.query(
+    `UPDATE monitors SET security_scanned_at = now(), third_party_origins = $2 WHERE id = $1`,
+    [monitor.id, JSON.stringify(result.meta?.thirdPartyOrigins || [])]
+  );
+
+  // --- Regressions ---
+  const { regressions, improvements } = diffScans(previousFindings, result.findings);
+  for (const regression of regressions) {
+    await recordSecurityEvent(monitor, {
+      kind: "scan_regression",
+      severity: regression.severity,
+      title: `${regression.check} went from passing to failing`,
+      detail: regression.detail,
+      data: { check: regression.check, category: regression.category, remediation: regression.remediation },
+      dedupeKey: regression.check,
+    });
+  }
+  // Improvements are recorded but never notify. Seeing that Friday's
+  // deploy fixed three findings is genuinely useful in the timeline and
+  // in a client report; it is not worth a notification.
+  for (const improvement of improvements) {
+    await recordSecurityEvent(monitor, {
+      kind: "scan_improvement",
+      severity: "info",
+      title: `${improvement.check} now passes`,
+      detail: improvement.detail,
+      data: { check: improvement.check },
+      dedupeKey: improvement.check,
+      notify: false,
+    });
+  }
+
+  // --- New third-party origins ---
+  //
+  // A script origin appearing on a page that didn't have it before is
+  // what a supply-chain compromise looks like from the outside. It's
+  // also what adding a legitimate analytics tag looks like, so this is a
+  // "confirm this was you" notification rather than an accusation.
+  const previousOrigins = monitor.third_party_origins || [];
+  const currentOrigins = result.meta?.thirdPartyOrigins || [];
+  if (Array.isArray(previousOrigins) && previousOrigins.length > 0) {
+    const added = currentOrigins.filter((origin) => !previousOrigins.includes(origin));
+    if (added.length > 0) {
+      await recordSecurityEvent(monitor, {
+        kind: "third_party_origin_added",
+        severity: "medium",
+        title: `new third-party script origin${added.length === 1 ? "" : "s"} on the page`,
+        detail: `${added.join(", ")} now serve${added.length === 1 ? "s" : ""} script, iframe or stylesheet content on this page and didn't at the last scan. If that was a deliberate change (a new analytics or support widget), nothing to do. If it wasn't, this is what an injected script looks like from the outside.`,
+        data: { added, previous: previousOrigins, current: currentOrigins },
+        dedupeKey: added.sort().join(","),
+      });
+    }
+  }
+
+  return rows[0];
+}
+
+// ---------------------------------------------------------------------
+// DNS sweep
+// ---------------------------------------------------------------------
+
+// Cheap enough (a handful of UDP lookups, no HTTP) to run on a much
+// tighter cadence than the scan sweep. Drift is the signal here where
+// the delay between "it changed" and "you found out" is the entire
+// value of the feature.
+export async function runDnsSweep({ userId = null, limit = MAX_DNS_CHECKS_PER_RUN } = {}) {
+  const conditions = [
+    `active = true`,
+    `monitor_type != 'tcp'`,
+    `(dns_checked_at IS NULL OR dns_checked_at <= now() - interval '${DNS_CHECK_INTERVAL_HOURS} hours')`,
+  ];
+  const params = [];
+  if (userId) {
+    params.push(userId);
+    conditions.push(`user_id = $${params.length}`);
+  }
+  params.push(limit);
+
+  const { rows: due } = await pool.query(
+    `SELECT * FROM monitors WHERE ${conditions.join(" AND ")} LIMIT $${params.length}`,
+    params
+  );
+
+  let checked = 0;
+  for (const monitor of due) {
+    const hostname = hostnameFromUrl(monitor.url);
+    if (!hostname) continue;
+
+    let snapshot;
+    try {
+      snapshot = await snapshotDns(hostname);
+    } catch {
+      continue;
+    }
+
+    const previous = monitor.dns_snapshot || null;
+
+    await pool.query(`UPDATE monitors SET dns_snapshot = $2, dns_checked_at = now() WHERE id = $1`, [
+      monitor.id,
+      JSON.stringify(snapshot),
+    ]);
+    await pool.query(`INSERT INTO dns_snapshots (monitor_id, records) VALUES ($1, $2)`, [monitor.id, JSON.stringify(snapshot)]);
+    checked += 1;
+
+    // First snapshot is a baseline, not a change - same rule as every
+    // other before/after detector in this app.
+    for (const change of diffSnapshots(previous, snapshot)) {
+      await recordSecurityEvent(monitor, {
+        kind: "dns_drift",
+        severity: change.severity,
+        title: `${change.label} record changed`,
+        detail: `${change.summary}. If you didn't make this change, treat it seriously - DNS is how an attacker redirects a domain without ever touching the server.`,
+        data: change,
+        dedupeKey: `${change.record}:${[...change.added, ...change.removed].sort().join(",")}`,
+      });
+    }
+
+    // Dangling CNAME / subdomain takeover.
+    const dangling = await checkDanglingCname(hostname, snapshot);
+    if (dangling) {
+      await recordSecurityEvent(monitor, {
+        kind: "dangling_cname",
+        severity: "critical",
+        title: `possible subdomain takeover (${dangling.platform})`,
+        detail: dangling.detail,
+        data: dangling,
+        dedupeKey: `${dangling.platform}:${dangling.target}`,
+      });
+    }
+  }
+
+  return checked;
+}
+
+// ---------------------------------------------------------------------
+// Certificate Transparency sweep
+// ---------------------------------------------------------------------
+
+export async function runCtSweep({ userId = null, limit = MAX_CT_CHECKS_PER_RUN } = {}) {
+  const conditions = [
+    `active = true`,
+    `ct_enabled = true`,
+    `url LIKE 'https://%'`,
+    `(ct_checked_at IS NULL OR ct_checked_at <= now() - interval '${CT_CHECK_INTERVAL_HOURS} hours')`,
+  ];
+  const params = [];
+  if (userId) {
+    params.push(userId);
+    conditions.push(`user_id = $${params.length}`);
+  }
+  params.push(limit);
+
+  const { rows: due } = await pool.query(
+    `SELECT * FROM monitors WHERE ${conditions.join(" AND ")} LIMIT $${params.length}`,
+    params
+  );
+
+  let checked = 0;
+  for (const monitor of due) {
+    const hostname = hostnameFromUrl(monitor.url);
+    if (!hostname) continue;
+    const root = registrableRoot(hostname);
+
+    let certificates;
+    try {
+      certificates = await fetchCtCertificates(root);
+    } catch (err) {
+      // crt.sh being slow or down is not an event worth telling anyone
+      // about. Mark it checked so one unavailable third party can't jam
+      // the sweep on the same monitor forever.
+      console.error(`CT lookup failed for ${root}:`, err.message);
+      await pool.query(`UPDATE monitors SET ct_checked_at = now() WHERE id = $1`, [monitor.id]);
+      continue;
+    }
+
+    const { rows: knownRows } = await pool.query(`SELECT cert_id, issuer FROM ct_certificates WHERE monitor_id = $1`, [monitor.id]);
+    const isFirstRun = knownRows.length === 0;
+    const knownIds = new Set(knownRows.map((row) => row.cert_id));
+    const knownIssuers = new Set(knownRows.map((row) => normalizeIssuer(row.issuer || "")));
+
+    for (const cert of certificates) {
+      await pool.query(
+        `INSERT INTO ct_certificates (monitor_id, cert_id, common_name, names, issuer, not_before, not_after)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (monitor_id, cert_id) DO NOTHING`,
+        [monitor.id, cert.id, cert.commonName, JSON.stringify(cert.names), cert.issuer, cert.notBefore || null, cert.notAfter || null]
+      );
+    }
+
+    await pool.query(`UPDATE monitors SET ct_checked_at = now() WHERE id = $1`, [monitor.id]);
+    checked += 1;
+
+    // The first sweep for a monitor imports the domain's entire current
+    // certificate history. Alerting on that would mean dozens of
+    // notifications for certificates the user has had for years - so the
+    // first run is silently a baseline, exactly like content_hash and
+    // tls_fingerprint.
+    if (isFirstRun) continue;
+
+    // Only certificates that are both new to us *and* recently issued.
+    // A cert we've never seen but which was issued eight months ago is
+    // a gap in our own records, not an issuance event.
+    const unseen = certificates.filter((cert) => !knownIds.has(cert.id));
+    for (const cert of recentlyIssued(unseen, 7)) {
+      const familiarIssuer = knownIssuers.has(normalizeIssuer(cert.issuer || ""));
+      await recordSecurityEvent(monitor, {
+        kind: "ct_new_certificate",
+        severity: familiarIssuer ? "low" : "high",
+        title: familiarIssuer ? "new certificate issued (familiar CA)" : "new certificate issued by an unfamiliar CA",
+        detail: familiarIssuer
+          ? `A certificate for ${cert.commonName || cert.names[0]} was logged, issued by ${cert.issuer}, a CA that has issued for this domain before. Almost certainly a renewal.`
+          : `A certificate covering ${cert.names.slice(0, 5).join(", ")} was issued by ${cert.issuer}, which has never issued for this domain before. If you didn't request it, someone else proved control of the domain to a CA - check your DNS and registrar account.`,
+        data: { certId: cert.id, names: cert.names, issuer: cert.issuer, notBefore: cert.notBefore, notAfter: cert.notAfter },
+        dedupeKey: cert.id,
+      });
+    }
+  }
+
+  return checked;
 }
 
 async function alertDown(monitor, result, incidentId) {
