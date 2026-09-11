@@ -67,6 +67,25 @@ router.post("/logout", (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));
 });
 
+// Same rate-limit shape as login (IP bucket, since there's no email in
+// the body to key a second bucket off of) - the current-password check
+// below is exactly the kind of thing brute-forcing would target.
+router.post("/change-password", requireAuth, authRateLimit({ max: 5, windowMinutes: 15 }), async (req, res) => {
+  const { current_password, new_password } = req.body;
+  if (!current_password || !new_password || new_password.length < 8) {
+    return res.status(400).json({ error: "current password and a new 8+ character password are required" });
+  }
+  const { rows } = await pool.query(`SELECT password_hash FROM users WHERE id = $1`, [req.userId]);
+  const user = rows[0];
+  if (!user || !(await bcrypt.compare(current_password, user.password_hash))) {
+    await req.recordAuthFailure();
+    return res.status(401).json({ error: "current password is incorrect" });
+  }
+  const hash = await bcrypt.hash(new_password, 12);
+  await pool.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [req.userId, hash]);
+  res.json({ ok: true });
+});
+
 router.get("/me", requireAuth, async (req, res) => {
   const { rows } = await pool.query(
     `SELECT id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at, notification_prefs FROM users WHERE id = $1`,
@@ -92,7 +111,13 @@ router.patch("/me", requireAuth, async (req, res) => {
   const { rows } = await pool.query(
     `UPDATE users SET
        alert_email = COALESCE($2, alert_email),
-       telegram_chat_id = $3,
+       -- Unlike the other fields, an explicit clear (empty string, to
+       -- disconnect Telegram) is a real, valid request here - so this
+       -- can't just be COALESCE($3, telegram_chat_id), which would be
+       -- unable to tell "clear it" apart from "field wasn't in this
+       -- request" (both arrive as NULL). $6 carries that distinction
+       -- separately instead.
+       telegram_chat_id = CASE WHEN $6 THEN $3 ELSE telegram_chat_id END,
        digest_enabled = COALESCE($4, digest_enabled),
        notification_prefs = COALESCE($5, notification_prefs)
      WHERE id = $1 RETURNING id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at, notification_prefs`,
@@ -102,6 +127,7 @@ router.patch("/me", requireAuth, async (req, res) => {
       telegram_chat_id?.trim() || null,
       digest_enabled === undefined ? null : !!digest_enabled,
       mergedPrefs ? JSON.stringify(mergedPrefs) : null,
+      telegram_chat_id !== undefined,
     ]
   );
   res.json(rows[0]);

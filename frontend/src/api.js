@@ -37,6 +37,7 @@ export const login = (payload) => apiFetch("/auth/login", { method: "POST", body
 export const logout = () => apiFetch("/auth/logout", { method: "POST" });
 export const getMe = () => apiFetch("/auth/me");
 export const updateMe = (payload) => apiFetch("/auth/me", { method: "PATCH", body: JSON.stringify(payload) });
+export const changePassword = (payload) => apiFetch("/auth/change-password", { method: "POST", body: JSON.stringify(payload) });
 
 export const listMonitors = () => apiFetch("/monitors");
 export const checkNow = () => apiFetch("/monitors/check-now", { method: "POST", timeoutMs: 40000 });

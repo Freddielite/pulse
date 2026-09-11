@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { updateMe, getTelegramStatus, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
+import { updateMe, changePassword, getTelegramStatus, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
 import { usePush } from "../hooks/usePush.js";
 
 // Shared shape between the push and Telegram checkbox lists below - keep
@@ -38,7 +38,12 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   const [alertEmail, setAlertEmail] = useState(user.alert_email || "");
   const [savingEmail, setSavingEmail] = useState(false);
   const [telegramStatus, setTelegramStatus] = useState(null); // { configured, ready, source }
+  const [telegramChatId, setTelegramChatId] = useState(user.telegram_chat_id || "");
+  const [savingTelegramChatId, setSavingTelegramChatId] = useState(false);
   const [digestBusy, setDigestBusy] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
   const [tokens, setTokens] = useState([]);
   const [newTokenName, setNewTokenName] = useState("");
   const [creatingToken, setCreatingToken] = useState(false);
@@ -113,6 +118,37 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
       toast(err.message, "error");
     } finally {
       setDigestBusy(false);
+    }
+  }
+
+  async function handleSaveTelegramChatId(e) {
+    e.preventDefault();
+    setSavingTelegramChatId(true);
+    try {
+      const updated = await updateMe({ telegram_chat_id: telegramChatId.trim() });
+      onUserUpdated(updated);
+      const status = await getTelegramStatus().catch(() => null);
+      if (status) setTelegramStatus(status);
+      toast("Telegram chat ID saved.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setSavingTelegramChatId(false);
+    }
+  }
+
+  async function handleChangePassword(e) {
+    e.preventDefault();
+    setChangingPassword(true);
+    try {
+      await changePassword({ current_password: currentPassword, new_password: newPassword });
+      setCurrentPassword("");
+      setNewPassword("");
+      toast("Password changed.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setChangingPassword(false);
     }
   }
 
@@ -227,11 +263,29 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
                 </div>
                 <div className="pl-settings-row__desc">
                   {telegramStatus.ready
-                    ? "Alerts will be sent to the chat ID configured on the server."
-                    : "Set TELEGRAM_CHAT_ID in the backend's environment variables to turn this on."}
+                    ? telegramStatus.source === "env"
+                      ? "Alerts go to the chat ID set server-wide for this deployment."
+                      : "Alerts go to the chat ID you've saved below."
+                    : "Message your bot on Telegram, then paste your chat ID below - @userinfobot will tell you your ID if you're not sure how to find it."}
                 </div>
               </div>
             </div>
+
+            <form onSubmit={handleSaveTelegramChatId} style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 12 }}>
+              <div className="pl-field" style={{ flex: 1, marginBottom: 0 }}>
+                <label>Your chat ID</label>
+                <input value={telegramChatId} onChange={(e) => setTelegramChatId(e.target.value)} placeholder="e.g. 123456789" />
+              </div>
+              <button className="pl-btn pl-btn--sm" type="submit" disabled={savingTelegramChatId}>
+                {savingTelegramChatId ? "Saving..." : "Save"}
+              </button>
+            </form>
+            {telegramStatus.source === "env" && (
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>
+                A server-wide chat ID takes priority over this one - saving one here only takes effect if that's ever removed.
+              </div>
+            )}
+
             {telegramStatus.ready && (
               <NotificationEventList
                 prefs={user.notification_prefs?.telegram}
@@ -282,6 +336,36 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
             <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleDeleteToken(t.id)}>Revoke</button>
           </div>
         ))}
+      </div>
+
+      <div className="pl-section-label">Security</div>
+      <div className="pl-panel">
+        <form onSubmit={handleChangePassword} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="pl-field" style={{ marginBottom: 0 }}>
+            <label>Current password</label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </div>
+          <div className="pl-field" style={{ marginBottom: 0 }}>
+            <label>New password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+              required
+            />
+          </div>
+          <button className="pl-btn pl-btn--sm" type="submit" disabled={changingPassword} style={{ alignSelf: "flex-start" }}>
+            {changingPassword ? "Saving..." : "Change password"}
+          </button>
+        </form>
       </div>
 
       <div className="pl-section-label">Account</div>
