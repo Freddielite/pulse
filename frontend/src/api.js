@@ -74,8 +74,6 @@ export const unsubscribePush = (endpoint) => apiFetch("/push/unsubscribe", { met
 
 export const getTelegramStatus = () => apiFetch("/telegram/status");
 
-export const sendDigestTest = () => apiFetch("/auth/digest-test", { method: "POST" });
-
 export const listApiTokens = () => apiFetch("/tokens");
 export const createApiToken = (name) => apiFetch("/tokens", { method: "POST", body: JSON.stringify({ name }) });
 export const deleteApiToken = (id) => apiFetch(`/tokens/${id}`, { method: "DELETE" });

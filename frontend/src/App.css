@@ -1262,6 +1262,10 @@ a {
   background: var(--signal);
 }
 
+.pl-toggle:disabled {
+  cursor: wait;
+}
+
 .pl-toggle__knob {
   position: absolute;
   top: 2px;
@@ -1275,6 +1279,44 @@ a {
 
 .pl-toggle.on .pl-toggle__knob {
   transform: translateX(18px);
+}
+
+/* Mid-flight state: subscribing/unsubscribing push, or saving the
+   digest toggle, both involve a round trip (and for push, a browser
+   permission prompt) that can take a couple of seconds - long enough
+   that a toggle which just sits there disabled reads as broken. Turn
+   the knob into a spinner instead of leaving it static, and keep it
+   spinning at whichever side it started from (.on may or may not be
+   set yet depending on which direction it's moving) rather than
+   letting the spin animation's own transform silently cancel the
+   translateX that positions it. */
+.pl-toggle.busy .pl-toggle__knob {
+  background: transparent;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: pl-toggle-spin-off 0.6s linear infinite;
+}
+
+.pl-toggle.on.busy .pl-toggle__knob {
+  animation: pl-toggle-spin-on 0.6s linear infinite;
+}
+
+@keyframes pl-toggle-spin-off {
+  from {
+    transform: translateX(0) rotate(0deg);
+  }
+  to {
+    transform: translateX(0) rotate(360deg);
+  }
+}
+
+@keyframes pl-toggle-spin-on {
+  from {
+    transform: translateX(18px) rotate(0deg);
+  }
+  to {
+    transform: translateX(18px) rotate(360deg);
+  }
 }
 
 @media (max-width: 560px) {

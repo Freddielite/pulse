@@ -2,7 +2,6 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { sendDigest } from "../lib/digest.js";
 import { authRateLimit } from "../middleware/rateLimit.js";
 import { normalizeNotificationPrefs } from "../lib/notificationPrefs.js";
 
@@ -106,16 +105,6 @@ router.patch("/me", requireAuth, async (req, res) => {
     ]
   );
   res.json(rows[0]);
-});
-
-// Sends the digest right now regardless of the weekly cadence clock -
-// doesn't touch digest_sent_at, same "test doesn't affect real state"
-// shape as the push/Telegram test buttons.
-router.post("/digest-test", requireAuth, async (req, res) => {
-  const { rows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [req.userId]);
-  const result = await sendDigest(rows[0]);
-  if (!result.sent) return res.status(400).json({ error: result.reason || "nothing to send" });
-  res.json(result);
 });
 
 export default router;

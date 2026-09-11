@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { updateMe, getTelegramStatus, sendDigestTest, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
+import { updateMe, getTelegramStatus, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
 import { usePush } from "../hooks/usePush.js";
 
 // Shared shape between the push and Telegram checkbox lists below - keep
@@ -40,7 +40,6 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   const [savingEmail, setSavingEmail] = useState(false);
   const [telegramStatus, setTelegramStatus] = useState(null); // { configured, ready, source }
   const [digestBusy, setDigestBusy] = useState(false);
-  const [digestTesting, setDigestTesting] = useState(false);
   const [tokens, setTokens] = useState([]);
   const [newTokenName, setNewTokenName] = useState("");
   const [creatingToken, setCreatingToken] = useState(false);
@@ -118,18 +117,6 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     }
   }
 
-  async function handleDigestTest() {
-    setDigestTesting(true);
-    try {
-      await sendDigestTest();
-      toast("Test digest sent.");
-    } catch (err) {
-      toast(err.message, "error");
-    } finally {
-      setDigestTesting(false);
-    }
-  }
-
   async function handleLogout() {
     await logout();
     onLoggedOut();
@@ -182,7 +169,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
             </div>
           </div>
           {push.supported && (
-            <button className={`pl-toggle ${push.subscribed ? "on" : ""}`} onClick={handlePushToggle} disabled={push.busy}>
+            <button className={`pl-toggle ${push.subscribed ? "on" : ""} ${push.busy ? "busy" : ""}`} onClick={handlePushToggle} disabled={push.busy}>
               <span className="pl-toggle__knob" />
             </button>
           )}
@@ -224,18 +211,10 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
               )}
             </div>
           </div>
-          <button className={`pl-toggle ${user.digest_enabled ? "on" : ""}`} onClick={handleDigestToggle} disabled={digestBusy}>
+          <button className={`pl-toggle ${user.digest_enabled ? "on" : ""} ${digestBusy ? "busy" : ""}`} onClick={handleDigestToggle} disabled={digestBusy}>
             <span className="pl-toggle__knob" />
           </button>
         </div>
-        {user.digest_enabled && (
-          <div className="pl-settings-row">
-            <div className="pl-settings-row__desc">Send a test digest now</div>
-            <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleDigestTest} disabled={digestTesting}>
-              {digestTesting ? "Sending..." : "Send test"}
-            </button>
-          </div>
-        )}
       </div>
 
       {telegramStatus?.configured && (
