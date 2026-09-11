@@ -422,7 +422,7 @@ export function analyzeHtml(html, finalUrl) {
   if (!html || !/<html|<!doctype/i.test(html.slice(0, 2000))) {
     // Not an HTML document - a JSON API, most likely. These checks don't
     // apply, and reporting them as passes would be misleading.
-    return { findings, thirdPartyOrigins: [] };
+    return { findings, thirdPartyOrigins: [], firstPartyScripts: [] };
   }
 
   const origin = new URL(finalUrl).origin;
@@ -433,6 +433,11 @@ export function analyzeHtml(html, finalUrl) {
   const thirdParty = new Set();
   const insecure = [];
   const missingSri = [];
+  // First-party JS, kept separate from thirdParty (which classify() never
+  // populates for these) so auditSourceMaps() below has something to work
+  // from - source maps are only ever worth checking for scripts this site
+  // actually serves itself.
+  const firstPartyScripts = new Set();
 
   function classify(match, kind) {
     const [tag, src] = match;
@@ -443,7 +448,11 @@ export function analyzeHtml(html, finalUrl) {
       return;
     }
     if (resolved.protocol === "http:") insecure.push(resolved.href);
-    if (resolved.origin === origin || resolved.protocol === "data:" || resolved.protocol === "blob:") return;
+    if (resolved.origin === origin) {
+      if (kind === "script") firstPartyScripts.add(resolved.href);
+      return;
+    }
+    if (resolved.protocol === "data:" || resolved.protocol === "blob:") return;
     thirdParty.add(resolved.origin);
     if (kind === "script" && !/\bintegrity\s*=/i.test(tag)) missingSri.push(resolved.href);
   }
@@ -502,7 +511,7 @@ export function analyzeHtml(html, finalUrl) {
     );
   }
 
-  return { findings, thirdPartyOrigins };
+  return { findings, thirdPartyOrigins, firstPartyScripts: [...firstPartyScripts] };
 }
 
 // ---------------------------------------------------------------------
@@ -745,6 +754,71 @@ async function probePaths(origin, budget, baseline, definitions) {
   return findings;
 }
 
+// A real source map is a JSON document with a "mappings" or "sources"
+// key. Checking that shape (rather than trusting a 200) is what keeps
+// this from false-flagging a site whose catch-all page happens to answer
+// /main.js.map with HTTP 200.
+function looksLikeSourceMap(body) {
+  if (!body) return false;
+  try {
+    const parsed = JSON.parse(body);
+    return typeof parsed === "object" && parsed !== null && ("mappings" in parsed || "sources" in parsed);
+  } catch {
+    return false;
+  }
+}
+
+// Source maps map minified production JS back to original source -
+// variable names, file layout, comments, sometimes whole modules that
+// were never meant to ship. Bundlers emit them next to the script they
+// describe (main.abc123.js -> main.abc123.js.map), so first-party script
+// URLs already collected from the page are exactly what to check; there's
+// no fixed well-known path the way there is for .env or .git/config.
+//
+// Capped at 6 scripts - deep chunked bundles can produce dozens of JS
+// files, and this only needs to establish whether maps are being shipped
+// at all, not enumerate every one.
+async function auditSourceMaps(firstPartyScripts, budget) {
+  const findings = [];
+  const candidates = firstPartyScripts.filter((src) => !src.endsWith(".map")).slice(0, 6);
+  if (candidates.length === 0) return findings;
+
+  const exposed = [];
+  let budgetExhausted = false;
+  await Promise.all(
+    candidates.map(async (src) => {
+      const result = await safeFetch(`${src}.map`, budget, { redirect: "manual", readBody: true });
+      if (!result) {
+        budgetExhausted = true;
+        return;
+      }
+      if (result.error) return;
+      if (result.response.status === 200 && looksLikeSourceMap(result.body)) exposed.push(`${src}.map`);
+    })
+  );
+
+  // Same reasoning as probePaths: running out of budget and finding
+  // nothing are different outcomes, and only one of them is actually a
+  // pass.
+  if (exposed.length === 0 && budgetExhausted) {
+    findings.push(finding("Source maps not publicly exposed", true, "Not checked - the scan's request budget was reached.", SEVERITY.INFO, "disclosure"));
+    return findings;
+  }
+
+  findings.push(
+    finding(
+      "Source maps not publicly exposed",
+      exposed.length === 0,
+      exposed.length === 0
+        ? `Checked ${candidates.length} first-party script${candidates.length === 1 ? "" : "s"} for a matching .map file - none found.`
+        : `${exposed.length} source map${exposed.length === 1 ? "" : "s"} publicly readable, including ${exposed.slice(0, 2).join(", ")}${exposed.length > 2 ? ", ..." : ""}. These reconstruct close to the original, unminified source - variable names, file structure, and any comments left in. Most build tools (Vite, webpack, CRA) can be told not to emit maps in production, or to emit them without uploading to the public build output.`,
+      SEVERITY.MEDIUM,
+      "disclosure"
+    )
+  );
+  return findings;
+}
+
 // ---------------------------------------------------------------------
 // API-shaped checks
 // ---------------------------------------------------------------------
@@ -758,43 +832,74 @@ async function probeApiSurface(url, origin, budget) {
   // does it do so while allowing credentials? That combination means any
   // site a logged-in visitor lands on can read authenticated responses
   // from this API in their browser.
-  const cors = await safeFetch(url, budget, {
+  //
+  // Checked on both the OPTIONS preflight and a real GET with an Origin
+  // header. Simple GETs never trigger a browser preflight at all, so some
+  // servers only bother setting CORS headers on the actual response - a
+  // preflight-only probe would call that a pass while the exposure is
+  // real for exactly the requests that matter.
+  const corsPreflight = await safeFetch(url, budget, {
     method: "OPTIONS",
     redirect: "manual",
     headers: { origin: CORS_PROBE_ORIGIN, "access-control-request-method": "GET" },
   });
-  if (cors && !cors.error) {
-    const allowOrigin = cors.response.headers.get("access-control-allow-origin");
-    const allowCredentials = (cors.response.headers.get("access-control-allow-credentials") || "").toLowerCase() === "true";
-    const reflects = allowOrigin === CORS_PROBE_ORIGIN;
-    const wildcard = allowOrigin === "*";
+  const corsActual = await safeFetch(url, budget, {
+    method: "GET",
+    redirect: "manual",
+    headers: { origin: CORS_PROBE_ORIGIN },
+  });
 
-    if (reflects && allowCredentials) {
+  function evaluateCors(result) {
+    if (!result || result.error) return null;
+    const allowOrigin = result.response.headers.get("access-control-allow-origin");
+    const allowCredentials = (result.response.headers.get("access-control-allow-credentials") || "").toLowerCase() === "true";
+    return { allowOrigin, allowCredentials, reflects: allowOrigin === CORS_PROBE_ORIGIN, wildcard: allowOrigin === "*" };
+  }
+
+  const preflightCors = evaluateCors(corsPreflight);
+  const actualCors = evaluateCors(corsActual);
+  const corsResults = [
+    preflightCors && { ...preflightCors, via: "preflight" },
+    actualCors && { ...actualCors, via: "actual response" },
+  ].filter(Boolean);
+
+  if (corsResults.length > 0) {
+    const rank = (r) => (r.reflects && r.allowCredentials ? 0 : r.reflects ? 1 : r.wildcard && r.allowCredentials ? 2 : 3);
+    const worst = corsResults.reduce((acc, r) => (rank(r) < rank(acc) ? r : acc));
+    // Only worth calling out where the check found it if the two probes
+    // actually disagreed - otherwise it's noise on top of a consistent
+    // result.
+    const disagreement =
+      corsResults.length === 2 && (preflightCors.reflects !== actualCors.reflects || preflightCors.allowCredentials !== actualCors.allowCredentials)
+        ? ` (seen on the ${worst.via} only - checked both since they can differ)`
+        : "";
+
+    if (worst.reflects && worst.allowCredentials) {
       findings.push(
         finding(
           "CORS policy not overly permissive",
           false,
-          "The server reflected an arbitrary Origin back in Access-Control-Allow-Origin and set Access-Control-Allow-Credentials: true. Any website a logged-in user visits can read authenticated responses from this endpoint. This is usually a reflect-the-origin CORS config that was only ever meant to say \"allow my own frontend\".",
+          `The server reflected an arbitrary Origin back in Access-Control-Allow-Origin and set Access-Control-Allow-Credentials: true${disagreement}. Any website a logged-in user visits can read authenticated responses from this endpoint. This is usually a reflect-the-origin CORS config that was only ever meant to say "allow my own frontend".`,
           SEVERITY.CRITICAL,
           "api"
         )
       );
-    } else if (reflects) {
+    } else if (worst.reflects) {
       findings.push(
         finding(
           "CORS policy not overly permissive",
           false,
-          "The server reflects any Origin it's given back in Access-Control-Allow-Origin. Much less serious without credentials allowed, but it means the allowlist isn't actually an allowlist.",
+          `The server reflects any Origin it's given back in Access-Control-Allow-Origin${disagreement}. Much less serious without credentials allowed, but it means the allowlist isn't actually an allowlist.`,
           SEVERITY.MEDIUM,
           "api"
         )
       );
-    } else if (wildcard && allowCredentials) {
+    } else if (worst.wildcard && worst.allowCredentials) {
       findings.push(
         finding(
           "CORS policy not overly permissive",
           false,
-          "Access-Control-Allow-Origin is * alongside Allow-Credentials: true. Browsers reject that combination outright, so this is likely breaking your own frontend as well.",
+          `Access-Control-Allow-Origin is * alongside Allow-Credentials: true${disagreement}. Browsers reject that combination outright, so this is likely breaking your own frontend as well.`,
           SEVERITY.MEDIUM,
           "api"
         )
@@ -804,7 +909,7 @@ async function probeApiSurface(url, origin, budget) {
         finding(
           "CORS policy not overly permissive",
           true,
-          allowOrigin ? `An unknown origin got "${allowOrigin}" back, not a reflection of itself.` : "The server didn't grant CORS access to an unknown origin.",
+          worst.allowOrigin ? `An unknown origin got "${worst.allowOrigin}" back, not a reflection of itself.` : "The server didn't grant CORS access to an unknown origin.",
           SEVERITY.CRITICAL,
           "api"
         )
@@ -939,8 +1044,9 @@ export async function scanSite(url, options = {}) {
   findings.push(...auditCookies(response, isHttps));
   findings.push(...auditDisclosure(response));
 
-  const { findings: htmlFindings, thirdPartyOrigins } = analyzeHtml(body, finalUrl);
+  const { findings: htmlFindings, thirdPartyOrigins, firstPartyScripts } = analyzeHtml(body, finalUrl);
   findings.push(...htmlFindings);
+  findings.push(...(await auditSourceMaps(firstPartyScripts, budget)));
 
   const baseline = await establishBaseline(origin, budget);
   findings.push(...(await probePaths(origin, budget, baseline, EXPOSED_PATHS)));
