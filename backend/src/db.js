@@ -45,14 +45,17 @@ export async function migrate() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_sent_at TIMESTAMPTZ;
 
     -- Per-channel, per-event-kind opt-outs for push and Telegram (email
-    -- stays all-or-nothing via alert_email, unchanged). Shape:
-    -- { push: { down, degraded, contentChanged, expiring, security, digest },
+    -- stays all-or-nothing via alert_email, unchanged; the weekly digest
+    -- has its own single on/off - digest_enabled above - rather than a
+    -- key here, so there's exactly one switch for it instead of two
+    -- disagreeing ones). Shape:
+    -- { push: { down, degraded, contentChanged, expiring, security },
     --   telegram: { ...same keys } }. Missing keys default to true - see
     -- lib/notificationPrefs.js, which is the only place that reads this
     -- column, so the default shape only has to be right in one place.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{
-      "push": {"down": true, "degraded": true, "contentChanged": true, "expiring": true, "security": true, "digest": true},
-      "telegram": {"down": true, "degraded": true, "contentChanged": true, "expiring": true, "security": true, "digest": true}
+      "push": {"down": true, "degraded": true, "contentChanged": true, "expiring": true, "security": true},
+      "telegram": {"down": true, "degraded": true, "contentChanged": true, "expiring": true, "security": true}
     }'::jsonb;
 
     -- express-session's connect-pg-simple store creates/manages this table

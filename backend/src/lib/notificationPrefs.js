@@ -7,8 +7,8 @@
 // silently reading as opted out.
 
 export const DEFAULT_NOTIFICATION_PREFS = {
-  push: { down: true, degraded: true, contentChanged: true, expiring: true, security: true, digest: true },
-  telegram: { down: true, degraded: true, contentChanged: true, expiring: true, security: true, digest: true },
+  push: { down: true, degraded: true, contentChanged: true, expiring: true, security: true },
+  telegram: { down: true, degraded: true, contentChanged: true, expiring: true, security: true },
 };
 
 const EVENT_KEYS = Object.keys(DEFAULT_NOTIFICATION_PREFS.push);

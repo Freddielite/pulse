@@ -11,7 +11,6 @@ const EVENT_TYPES = [
   { key: "contentChanged", label: "Content changes", desc: "A monitored page's content changes since the last check." },
   { key: "expiring", label: "Certificate & domain expiry", desc: "An SSL cert or domain registration is expiring soon." },
   { key: "security", label: "Security findings", desc: "A medium-or-higher severity security scan finding." },
-  { key: "digest", label: "Weekly digest", desc: "The weekly summary, if it's turned on below." },
 ];
 
 function NotificationEventList({ prefs, onChange }) {
