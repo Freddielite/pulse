@@ -937,6 +937,13 @@ a {
   padding: 60px 20px;
   z-index: 40;
   overflow-y: auto;
+  /* Without this, scrolling the modal to its top/bottom edge chains the
+     remaining scroll delta to whatever's behind it - the page underneath,
+     since this overlay covers it but isn't itself the document root. Same
+     fix, same reasoning as overscroll-behavior-y: contain on html/body
+     above; this just needs its own copy because it's a separate scroll
+     container. */
+  overscroll-behavior: contain;
 }
 
 .pl-modal {

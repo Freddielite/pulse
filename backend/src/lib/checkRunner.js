@@ -11,6 +11,7 @@ import { runAuthProbe } from "./authProbe.js";
 import { snapshotDns, diffSnapshots, checkDanglingCname, registrableRoot } from "./dnsCheck.js";
 import { fetchCtCertificates, recentlyIssued, normalizeIssuer } from "./ctLogs.js";
 import { recordSecurityEvent, diffScans } from "./securityEvents.js";
+import { wantsNotification } from "./notificationPrefs.js";
 
 // How often the (best-effort, rate-limited) cert/domain check runs per
 // monitor. Far coarser than the uptime check: a handshake + WHOIS lookup
@@ -676,9 +677,9 @@ async function alertDown(monitor, result, incidentId) {
   if (!user) return;
   const title = `${monitor.name} is down`;
   const body = result.errorMessage || "Check failed.";
-  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 async function alertStillDown(monitor, result, incident) {
@@ -689,9 +690,9 @@ async function alertStillDown(monitor, result, incident) {
   const hours = Math.round(downtimeMs / 3600000);
   const title = `${monitor.name} is still down`;
   const body = `Down for about ${hours} hour${hours === 1 ? "" : "s"} now. Latest: ${result.errorMessage || "Check failed."}`;
-  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 async function alertRecovered(monitor, incident) {
@@ -702,9 +703,9 @@ async function alertRecovered(monitor, incident) {
   const minutes = Math.round(downtimeMs / 60000);
   const title = `${monitor.name} is back up`;
   const body = `Was down for about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
-  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}\n${body}` });
+  if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}\n${body}` });
 }
 
 async function alertContentChanged(monitor) {
@@ -713,9 +714,9 @@ async function alertContentChanged(monitor) {
   if (!user) return;
   const title = `${monitor.name} content changed`;
   const body = "The page's content changed since the last check. If this was an expected deploy, no action needed - the new content is now the baseline for future comparisons.";
-  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "contentChanged")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `📝 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "telegram", "contentChanged")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `📝 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 // Lighter than alertDown: no incident row, no repeat "still degraded"
@@ -728,9 +729,9 @@ async function alertDegraded(monitor, result) {
   if (!user) return;
   const title = `${monitor.name} is responding slowly`;
   const body = `Response time is ${result.responseMs}ms, above the ${monitor.degraded_threshold_ms}ms threshold for ${monitor.alert_after_slow || 3} checks in a row. Still returning a valid response - not down.`;
-  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "degraded")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟡 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟡 ${title}\n${body}\n\n${monitor.url}` });
 }
 
 async function alertNoLongerDegraded(monitor) {
@@ -738,9 +739,9 @@ async function alertNoLongerDegraded(monitor) {
   const user = userRows[0];
   if (!user) return;
   const title = `${monitor.name} is back to normal speed`;
-  await sendPushToUser(monitor.user_id, { title, body: "Response time is back under the slow threshold.", url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "degraded")) await sendPushToUser(monitor.user_id, { title, body: "Response time is back under the slow threshold.", url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: "Response time is back under the slow threshold." });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}` });
+  if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}` });
 }
 
 // Throttled to one nudge per calendar day per monitor+kind, so a 14-day
@@ -761,7 +762,7 @@ async function alertExpiringSoon(monitor, kind, expiresAt) {
   const daysLeft = Math.ceil((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
   const title = `${kind} expiring soon`;
   const body = `${monitor.name}'s ${kind.toLowerCase()} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${expiresAt.toDateString()}).`;
-  await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "expiring")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `⚠️ ${title}\n${body}` });
+  if (wantsNotification(user, "telegram", "expiring")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `⚠️ ${title}\n${body}` });
 }

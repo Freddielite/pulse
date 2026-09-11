@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { sendTelegramMessage, telegramConfigured, resolveChatId } from "../lib/telegram.js";
+import { telegramConfigured, resolveChatId } from "../lib/telegram.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -18,18 +18,6 @@ router.get("/status", async (req, res) => {
     ready: telegramConfigured() && !!chatId,
     source: !chatId ? null : process.env.TELEGRAM_CHAT_ID ? "env" : "user",
   });
-});
-
-router.post("/test", async (req, res) => {
-  const { rows } = await pool.query(`SELECT telegram_chat_id FROM users WHERE id = $1`, [req.userId]);
-  const chatId = resolveChatId(rows[0]);
-  if (!chatId) return res.status(400).json({ error: "no Telegram chat ID configured" });
-  const result = await sendTelegramMessage({
-    chatId,
-    text: "Pulse: test notification. Telegram alerts are wired up correctly.",
-  });
-  if (!result.sent) return res.status(502).json({ error: result.reason || "failed to send" });
-  res.json({ ok: true });
 });
 
 export default router;

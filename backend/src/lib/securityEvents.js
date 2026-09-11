@@ -18,6 +18,7 @@ import { pool } from "../db.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
 import { sendTelegramMessage, resolveChatId } from "./telegram.js";
+import { wantsNotification } from "./notificationPrefs.js";
 
 // Severities at or above this actually notify. Everything else is
 // recorded to the timeline and shows up in the UI, but doesn't interrupt
@@ -84,13 +85,17 @@ async function notifySecurityEvent(monitor, event) {
   // Same three channels, same order, same failure tolerance as every
   // other alert in this app - a misconfigured SMTP server shouldn't stop
   // the push notification that already went out from counting.
-  await sendPushToUser(monitor.user_id, { title, body: body.slice(0, 240), url: `/monitors/${monitor.id}` });
+  if (wantsNotification(user, "push", "security")) {
+    await sendPushToUser(monitor.user_id, { title, body: body.slice(0, 240), url: `/monitors/${monitor.id}` });
+  }
   await sendAlertEmail({
     to: user.alert_email,
     subject: `Pulse security: ${title}`,
     text: `${body}\n\nMonitor: ${monitor.name}\nURL: ${monitor.url}`,
   });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `${icon} ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "telegram", "security")) {
+    await sendTelegramMessage({ chatId: resolveChatId(user), text: `${icon} ${title}\n${body}\n\n${monitor.url}` });
+  }
 }
 
 // Compares two scan results and reports what actually moved.

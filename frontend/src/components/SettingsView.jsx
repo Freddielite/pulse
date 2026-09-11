@@ -1,6 +1,38 @@
 import { useEffect, useState } from "react";
-import { updateMe, testPush, testTelegram, getTelegramStatus, sendDigestTest, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
+import { updateMe, getTelegramStatus, sendDigestTest, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
 import { usePush } from "../hooks/usePush.js";
+
+// Shared shape between the push and Telegram checkbox lists below - keep
+// in sync with DEFAULT_NOTIFICATION_PREFS in the backend's
+// lib/notificationPrefs.js.
+const EVENT_TYPES = [
+  { key: "down", label: "Downtime & recovery", desc: "A monitor goes down, stays down, or comes back up." },
+  { key: "degraded", label: "Slow responses", desc: "Response time crosses the slow threshold, and when it clears." },
+  { key: "contentChanged", label: "Content changes", desc: "A monitored page's content changes since the last check." },
+  { key: "expiring", label: "Certificate & domain expiry", desc: "An SSL cert or domain registration is expiring soon." },
+  { key: "security", label: "Security findings", desc: "A medium-or-higher severity security scan finding." },
+  { key: "digest", label: "Weekly digest", desc: "The weekly summary, if it's turned on below." },
+];
+
+function NotificationEventList({ prefs, onChange }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--panel-border)" }}>
+      {EVENT_TYPES.map(({ key, label, desc }) => (
+        <label className="pl-checkbox-row" key={key} style={{ alignItems: "flex-start" }}>
+          <input
+            type="checkbox"
+            checked={prefs?.[key] !== false}
+            onChange={(e) => onChange(key, e.target.checked)}
+          />
+          <span>
+            <span style={{ color: "var(--ink)" }}>{label}</span>
+            <span style={{ display: "block", fontSize: 11.5, color: "var(--ink-faint)" }}>{desc}</span>
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
 
 export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }) {
   const push = usePush();
@@ -40,19 +72,6 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     }
   }
 
-  async function handleTestPush() {
-    try {
-      const result = await testPush();
-      if (result.failed > 0) {
-        toast(`Delivered to ${result.sent} of ${result.sent + result.failed} device(s) - one or more subscriptions may be stale.`, "error");
-      } else {
-        toast(result.sent > 1 ? `Test notification sent to ${result.sent} devices.` : "Test notification sent.");
-      }
-    } catch (err) {
-      toast(err.message, "error");
-    }
-  }
-
   async function handleSaveEmail(e) {
     e.preventDefault();
     setSavingEmail(true);
@@ -67,11 +86,21 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     }
   }
 
-  async function handleTestTelegram() {
+  async function handleNotificationPrefChange(channel, key, value) {
+    // Optimistic - flip it locally right away, then reconcile with
+    // whatever the server actually saved (same shape as every other
+    // toggle in this view).
+    const prevPrefs = user.notification_prefs;
+    const optimistic = {
+      ...prevPrefs,
+      [channel]: { ...prevPrefs?.[channel], [key]: value },
+    };
+    onUserUpdated({ ...user, notification_prefs: optimistic });
     try {
-      await testTelegram();
-      toast("Test message sent.");
+      const updated = await updateMe({ notification_prefs: { [channel]: { [key]: value } } });
+      onUserUpdated(updated);
     } catch (err) {
+      onUserUpdated({ ...user, notification_prefs: prevPrefs });
       toast(err.message, "error");
     }
   }
@@ -159,10 +188,10 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
           )}
         </div>
         {push.subscribed && (
-          <div className="pl-settings-row">
-            <div className="pl-settings-row__desc">Send a test notification</div>
-            <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleTestPush}>Send test</button>
-          </div>
+          <NotificationEventList
+            prefs={user.notification_prefs?.push}
+            onChange={(key, value) => handleNotificationPrefChange("push", key, value)}
+          />
         )}
       </div>
 
@@ -224,10 +253,13 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
                     : "Set TELEGRAM_CHAT_ID in the backend's environment variables to turn this on."}
                 </div>
               </div>
-              {telegramStatus.ready && (
-                <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleTestTelegram}>Send test</button>
-              )}
             </div>
+            {telegramStatus.ready && (
+              <NotificationEventList
+                prefs={user.notification_prefs?.telegram}
+                onChange={(key, value) => handleNotificationPrefChange("telegram", key, value)}
+              />
+            )}
           </div>
         </>
       )}
@@ -287,3 +319,4 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     </div>
   );
 }
+

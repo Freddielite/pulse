@@ -4,6 +4,7 @@ import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { sendDigest } from "../lib/digest.js";
 import { authRateLimit } from "../middleware/rateLimit.js";
+import { normalizeNotificationPrefs } from "../lib/notificationPrefs.js";
 
 const router = Router();
 
@@ -69,7 +70,7 @@ router.post("/logout", (req, res) => {
 
 router.get("/me", requireAuth, async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at FROM users WHERE id = $1`,
+    `SELECT id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at, notification_prefs FROM users WHERE id = $1`,
     [req.userId]
   );
   if (rows.length === 0) return res.status(404).json({ error: "not found" });
@@ -77,14 +78,32 @@ router.get("/me", requireAuth, async (req, res) => {
 });
 
 router.patch("/me", requireAuth, async (req, res) => {
-  const { alert_email, telegram_chat_id, digest_enabled } = req.body;
+  const { alert_email, telegram_chat_id, digest_enabled, notification_prefs } = req.body;
+  // Merged against the current row (not just the default shape) so a
+  // PATCH that only touches, say, push.down doesn't clobber telegram
+  // prefs the user set in an earlier request.
+  let mergedPrefs = undefined;
+  if (notification_prefs !== undefined) {
+    const { rows: currentRows } = await pool.query(`SELECT notification_prefs FROM users WHERE id = $1`, [req.userId]);
+    mergedPrefs = normalizeNotificationPrefs({
+      push: { ...currentRows[0]?.notification_prefs?.push, ...notification_prefs?.push },
+      telegram: { ...currentRows[0]?.notification_prefs?.telegram, ...notification_prefs?.telegram },
+    });
+  }
   const { rows } = await pool.query(
     `UPDATE users SET
        alert_email = COALESCE($2, alert_email),
        telegram_chat_id = $3,
-       digest_enabled = COALESCE($4, digest_enabled)
-     WHERE id = $1 RETURNING id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at`,
-    [req.userId, alert_email?.trim() || null, telegram_chat_id?.trim() || null, digest_enabled === undefined ? null : !!digest_enabled]
+       digest_enabled = COALESCE($4, digest_enabled),
+       notification_prefs = COALESCE($5, notification_prefs)
+     WHERE id = $1 RETURNING id, email, alert_email, telegram_chat_id, digest_enabled, digest_sent_at, notification_prefs`,
+    [
+      req.userId,
+      alert_email?.trim() || null,
+      telegram_chat_id?.trim() || null,
+      digest_enabled === undefined ? null : !!digest_enabled,
+      mergedPrefs ? JSON.stringify(mergedPrefs) : null,
+    ]
   );
   res.json(rows[0]);
 });

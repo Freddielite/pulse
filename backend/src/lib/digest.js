@@ -2,6 +2,7 @@ import { pool } from "../db.js";
 import { sendAlertEmail } from "./mailer.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendTelegramMessage, resolveChatId } from "./telegram.js";
+import { wantsNotification } from "./notificationPrefs.js";
 
 const DIGEST_INTERVAL_DAYS = 7;
 // Same reasoning as MAX_CERT_CHECKS_PER_RUN/MAX_SECURITY_SCANS_PER_RUN in
@@ -73,9 +74,9 @@ export async function sendDigest(user) {
 
   const subject = `Pulse weekly digest: ${digest.headline}`;
   const text = `${digest.headline}\n\n${digest.detail}`;
-  await sendPushToUser(user.id, { title: "Pulse weekly digest", body: digest.headline, url: "/" });
+  if (wantsNotification(user, "push", "digest")) await sendPushToUser(user.id, { title: "Pulse weekly digest", body: digest.headline, url: "/" });
   await sendAlertEmail({ to: user.alert_email, subject, text });
-  await sendTelegramMessage({ chatId: resolveChatId(user), text: `📊 ${subject}\n\n${digest.detail}` });
+  if (wantsNotification(user, "telegram", "digest")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `📊 ${subject}\n\n${digest.detail}` });
   return { sent: true };
 }
 

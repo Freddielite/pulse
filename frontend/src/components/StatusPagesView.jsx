@@ -97,7 +97,7 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
           ) : (
             <div className="pl-field">
               <label>Monitors ({monitorIds.size} selected)</label>
-              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: 8 }}>
+              <div style={{ maxHeight: 220, overflowY: "auto", overscrollBehavior: "contain", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: 8 }}>
                 {monitors.map((m) => (
                   <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", fontSize: 13, cursor: "pointer" }}>
                     <input type="checkbox" checked={monitorIds.has(m.id)} onChange={() => toggleMonitor(m.id)} />
