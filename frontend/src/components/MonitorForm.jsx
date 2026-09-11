@@ -2,10 +2,12 @@ import { useState } from "react";
 import { createMonitor, updateMonitor } from "../api.js";
 import SyntheticStepsEditor from "./SyntheticStepsEditor.jsx";
 import Dropdown from "./Dropdown.jsx";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock.js";
 
 const DEFAULT_STEP = { method: "GET", url: "", expected_status: 200, body: "", body_contains: "", extract: null };
 
 export default function MonitorForm({ monitor, existingGroups = [], onClose, onSaved, toast }) {
+  useBodyScrollLock(true);
   const editing = !!monitor;
   const [name, setName] = useState(monitor?.name || "");
   const [url, setUrl] = useState(monitor?.url || "");

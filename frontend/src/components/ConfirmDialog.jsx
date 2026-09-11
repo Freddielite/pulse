@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock.js";
 
 // Rendered via a portal straight to <body> rather than in place: this
 // is a position:fixed overlay, and several places that use it (e.g.
@@ -9,6 +10,7 @@ import { createPortal } from "react-dom";
 // relative to that ancestor instead of the actual viewport. A portal
 // sidesteps the whole problem regardless of where this gets used.
 export default function ConfirmDialog({ title, body, confirmLabel = "Confirm", danger, onConfirm, onCancel }) {
+  useBodyScrollLock(true);
   return createPortal(
     <div className="pl-overlay" onClick={onCancel}>
       <div className="pl-panel pl-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>

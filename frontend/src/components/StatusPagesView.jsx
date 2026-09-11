@@ -3,12 +3,14 @@ import { createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusP
 import { createPortal } from "react-dom";
 import Dropdown from "./Dropdown.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock.js";
 
 // A combined status page is either group-based (live membership of an
 // existing group_name) or manual (a fixed list of monitor ids picked at
 // creation time) - never both. This mirrors that choice as a two-option
 // dropdown rather than trying to infer intent from which fields are set.
 function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toast }) {
+  useBodyScrollLock(true);
   const editing = !!page;
   const [name, setName] = useState(page?.name || "");
   const [mode, setMode] = useState(page?.group_name ? "group" : "manual");
