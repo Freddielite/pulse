@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { createMonitor, updateMonitor } from "../api.js";
 import SyntheticStepsEditor from "./SyntheticStepsEditor.jsx";
 import Dropdown from "./Dropdown.jsx";
@@ -94,7 +95,13 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
     }
   }
 
-  return (
+  // Portaled straight to <body>, same reasoning as ConfirmDialog: this is
+  // rendered inside .pl-page, which keeps a transform applied after its
+  // open animation ends (animation-fill-mode: both). A transformed
+  // ancestor creates a new containing block, so position:fixed here would
+  // size/clip itself against .pl-page's box instead of the real viewport -
+  // breaking the overlay's own scroll, not just chaining onto the body.
+  return createPortal(
     <div className="pl-overlay" onClick={onClose}>
       <div className="pl-panel pl-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pl-modal__title">{editing ? "Edit monitor" : "Add a monitor"}</div>
@@ -362,6 +369,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
