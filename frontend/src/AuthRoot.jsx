@@ -97,7 +97,7 @@ export default function AuthRoot({ onAuthed }) {
               </div>
               {mode === "signup" && (
                 <div className="pl-field">
-                  <label>Signup code (if one was given to you)</label>
+                  <label>Signup code</label>
                   <input type="text" value={signupCode} onChange={(e) => setSignupCode(e.target.value)} />
                 </div>
               )}

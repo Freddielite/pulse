@@ -36,17 +36,28 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [alertAfterSlow, setAlertAfterSlow] = useState(monitor?.alert_after_slow || 3);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  // Which org (if any) a new monitor belongs to - only offered on
-  // creation, since the backend doesn't yet support moving an existing
-  // monitor between personal and org ownership (see HANDOVER.md).
+  // Which org (if any) this monitor belongs to. Editable now for an
+  // existing monitor too, not just at creation - the backend's PATCH
+  // enforces that only the monitor's own creator can move it, and
+  // admin+ is required on whichever org it's moving into, so a member
+  // who can see this dropdown but isn't allowed to use it just gets a
+  // clear error back rather than the option being hidden from them.
   const [organizations, setOrganizations] = useState([]);
-  const [organizationId, setOrganizationId] = useState("");
+  const [organizationId, setOrganizationId] = useState(monitor?.organization_id || "");
 
   useEffect(() => {
-    if (editing) return;
     listOrganizations()
-      .then((orgs) => setOrganizations(orgs.filter((o) => o.role === "owner" || o.role === "admin")))
-      .catch(() => {}); // organizations are an optional convenience here - a fetch failure shouldn't block creating a monitor
+      .then((orgs) => {
+        const selectable = orgs.filter((o) => o.role === "owner" || o.role === "admin");
+        // The monitor's current org might not be one this user can move
+        // things INTO (e.g. they're only a plain member there) - still
+        // included so the dropdown shows where it actually is today,
+        // even though picking a different org they don't admin will be
+        // rejected server-side if they try to change it.
+        const current = orgs.find((o) => o.id === monitor?.organization_id);
+        setOrganizations(current && !selectable.some((o) => o.id === current.id) ? [...selectable, current] : selectable);
+      })
+      .catch(() => {}); // organizations are an optional convenience here - a fetch failure shouldn't block creating/editing a monitor
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -91,7 +102,12 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       auth_probe_expect: authProbeExpect.trim() || "401,403",
       ct_enabled: ctEnabled,
       alert_after_slow: Number(alertAfterSlow) || 3,
-      organization_id: !editing && organizationId ? organizationId : undefined,
+      // Only sent when it actually changed - on create that's simply
+      // "did they pick something", on edit it's compared against what
+      // the monitor already had, so saving the rest of the form without
+      // touching this dropdown never re-sends (and re-validates) an
+      // unchanged ownership.
+      organization_id: organizationId !== (monitor?.organization_id || "") ? organizationId || null : undefined,
     };
     try {
       if (editing) {
@@ -244,7 +260,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               ))}
             </datalist>
           </div>
-          {!editing && organizations.length > 0 && (
+          {organizations.length > 0 && (
             <div className="pl-field">
               <label>Owner</label>
               <Dropdown

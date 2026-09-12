@@ -185,11 +185,11 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
     <div style={{ paddingTop: 12, borderTop: "1px solid var(--panel-border)", marginTop: 12, display: "flex", flexDirection: "column", gap: 16 }}>
       <div>
         <div className="pl-settings-row__title" style={{ marginBottom: 8 }}>Members</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {detail.members.map((m) => (
-            <div key={m.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13 }}>
-              <span>{m.email}</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.email}</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
                 {isOwner && m.role !== "owner" ? (
                   <div style={{ width: 116 }}>
                     <Dropdown
@@ -214,10 +214,10 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
             </div>
           ))}
           {detail.pending_invites.map((inv) => (
-            <div key={inv.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13, color: "var(--ink-dim)" }}>
-              <span>{inv.invited_email} (invited, not yet joined)</span>
+            <div key={inv.id} style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "var(--ink-dim)" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inv.invited_email} (invited, not yet joined)</span>
               {canManage && (
-                <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleRemove(inv.id)}>
+                <button className="pl-btn pl-btn--ghost pl-btn--sm" style={{ alignSelf: "flex-end" }} onClick={() => handleRemove(inv.id)}>
                   Cancel
                 </button>
               )}

@@ -139,16 +139,32 @@ default, not a broken one.
   on every subsequent mutation. See the Tier 2 entry under "Recent
   changes" for why this was a deliberate scoping choice, not an
   oversight.
-- **A monitor or status page can't be moved between personal and org
-  ownership after creation.** `organization_id` is set once, at
-  creation time, through the create form's "Owner" selector - there's
-  no "assign this existing monitor to a team" action yet.
+- **A status page still can't be moved between personal and org
+  ownership after creation** (monitors can now - see "Recent changes").
+  `status_pages.organization_id` is set once, at creation, through the
+  create form's "Owner" selector - the same PATCH-side reassignment
+  monitors just got would extend directly if this is ever needed.
 - **`custom_domain` on an organization is a stored reminder, not
   automation.** Typing one in doesn't route anything - actually serving
   a client's own domain still needs a CNAME on their end and host
   routing/TLS on this app's end.
 
 ## Recent changes
+
+- **An existing monitor can now be moved into (or out of) an org.**
+  Closes the gap where being added to an org didn't retroactively grant
+  access to anything, since every monitor made before Tier 2 (or made
+  without picking an org at creation) stayed personal forever with no
+  way to change that. `PATCH /api/monitors/:id` now accepts
+  `organization_id`, gated narrower than every other field on that
+  route: only the monitor's own creator can move it at all (not just
+  anyone with access via org membership), and moving it INTO an org
+  additionally needs admin+ there - same bar as creating a new monitor
+  under that org. `MonitorForm.jsx`'s "Owner" selector is no longer
+  create-only; editing an existing monitor shows the same dropdown,
+  pre-set to wherever it currently lives, and only sends the field if
+  it actually changed. Status pages didn't get the same treatment yet -
+  see "Known limitations" for why that's still open, not forgotten.
 
 - **A pending org invite now bypasses `SIGNUP_CODE`.** These were two
   unrelated gates that had never been introduced to each other:

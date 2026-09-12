@@ -187,7 +187,7 @@ router.patch("/:id", async (req, res) => {
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
     active, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
-    degraded_threshold_ms, alert_after_slow, auth_probe_enabled, auth_probe_expect, ct_enabled,
+    degraded_threshold_ms, alert_after_slow, auth_probe_enabled, auth_probe_expect, ct_enabled, organization_id,
   } = req.body;
   if (alert_after_failures !== undefined && alert_after_failures !== null && Number(alert_after_failures) < 1) {
     return res.status(400).json({ error: "alert after failures must be at least 1" });
@@ -209,6 +209,26 @@ router.patch("/:id", async (req, res) => {
     if (normalizeMonitorType(monitor_type) === "tcp" && url) {
       const tcpError = validateTcpUrl(url);
       if (tcpError) return res.status(400).json({ error: tcpError });
+    }
+  }
+  // Moving a monitor between personal and org ownership (or between two
+  // orgs) is deliberately narrower than every other field here: only
+  // the monitor's own creator can do it - not just any member with
+  // access to it via the broadened ownership clause below - and moving
+  // it INTO an org additionally needs admin+ there, same bar as
+  // creating a new monitor under that org. Checked before the main
+  // UPDATE runs rather than folded into its WHERE clause, since the
+  // failure needs a clear, distinct error rather than a silent no-op
+  // 404 that would look like the monitor didn't exist.
+  if (organization_id !== undefined) {
+    const { rows: existing } = await pool.query(`SELECT user_id FROM monitors WHERE id = $1`, [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: "monitor not found" });
+    if (existing[0].user_id !== req.userId) {
+      return res.status(403).json({ error: "only the monitor's creator can move it between personal and organization ownership" });
+    }
+    if (organization_id) {
+      const allowed = await requireOrgRole(req.userId, organization_id, "admin");
+      if (!allowed) return res.status(403).json({ error: "you need admin access on that organization to move monitors into it" });
     }
   }
   try {
@@ -242,6 +262,11 @@ router.patch("/:id", async (req, res) => {
          -- leaving a stale "fail" sitting on the monitor row, which the
          -- UI would otherwise keep rendering as a live problem.
          auth_probe_status = CASE WHEN $22 IS NOT NULL AND $22 = false THEN NULL ELSE auth_probe_status END,
+         -- Explicit-clear-is-valid, same pattern as users.webhook_url in
+         -- routes/auth.js: organization_id genuinely can be set back to
+         -- NULL (moved to personal) as a real request, which a plain
+         -- COALESCE could never distinguish from "field wasn't sent".
+         organization_id = CASE WHEN $25 THEN $26 ELSE organization_id END,
          updated_at = now()
        WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2)) RETURNING *`,
       [
@@ -269,9 +294,17 @@ router.patch("/:id", async (req, res) => {
         auth_probe_enabled === undefined ? null : !!auth_probe_enabled,
         auth_probe_expect?.trim() || null,
         ct_enabled === undefined ? null : !!ct_enabled,
+        organization_id !== undefined,
+        organization_id || null,
       ]
     );
     if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+    // Moving a monitor INTO an org gets logged there; moving it OUT (back
+    // to personal) has nowhere to log to, since personal ownership has
+    // no audit trail of its own.
+    if (organization_id) {
+      await logOrgAction(organization_id, req.userId, "monitor_created", `moved existing monitor "${rows[0].name}" into this org`);
+    }
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
