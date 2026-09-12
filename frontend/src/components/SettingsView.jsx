@@ -13,6 +13,7 @@ import {
   disable2fa,
 } from "../api.js";
 import { usePush } from "../hooks/usePush.js";
+import { QRCodeSVG } from "qrcode.react";
 import OrganizationsPanel from "./OrganizationsPanel.jsx";
 
 // Shared shape between the push and Telegram checkbox lists below - keep
@@ -234,6 +235,15 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   async function handleCancelTotpSetup() {
     setTotpSetup(null);
     setTotpConfirmCode("");
+  }
+
+  async function handleCopyTotpSecret() {
+    try {
+      await navigator.clipboard.writeText(totpSetup.secret);
+      toast("Secret copied.");
+    } catch {
+      toast("Couldn't copy automatically - select and copy it manually.", "error");
+    }
   }
 
   async function handleSaveTelegramChatId(e) {
@@ -535,15 +545,17 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
         ) : totpSetup ? (
           <form onSubmit={handleConfirm2fa} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ fontSize: 12.5 }}>
-              Scan this into your authenticator app (Google Authenticator, Authy, 1Password, etc.), or enter the
-              secret manually:
+              Scan this into your authenticator app (Google Authenticator, Authy, 1Password, etc.):
             </div>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--panel-border)", borderRadius: 8, padding: 10, fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
-              {totpSetup.secret}
+            <div style={{ background: "#fff", borderRadius: 8, padding: 12, alignSelf: "flex-start" }}>
+              <QRCodeSVG value={totpSetup.otpauth_url} size={160} />
             </div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
-              Or open this URI directly on a device with an authenticator app installed: <br />
-              <span style={{ wordBreak: "break-all" }}>{totpSetup.otpauth_url}</span>
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Can't scan? Enter this secret manually instead:</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ background: "var(--bg)", border: "1px solid var(--panel-border)", borderRadius: 8, padding: 10, fontFamily: "monospace", fontSize: 13, wordBreak: "break-all", flex: 1 }}>
+                {totpSetup.secret}
+              </div>
+              <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleCopyTotpSecret}>Copy</button>
             </div>
             <div className="pl-field" style={{ marginBottom: 0 }}>
               <label>6-digit code from the app</label>
