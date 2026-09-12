@@ -132,13 +132,12 @@ default, not a broken one.
 - **WHOIS needs outbound TCP on port 43.** Most hosts allow this, but
   it's not universal. If every domain expiry check fails on your Render
   instance, this is the first thing to check.
-- **Org member role isn't enforced on editing/deleting an existing org
-  monitor.** Any accepted member (not just admin+) can edit or delete a
-  monitor once it belongs to an org they're in - role is checked at
-  creation and on org management (invites, role changes, removal), not
-  on every subsequent mutation. See the Tier 2 entry under "Recent
-  changes" for why this was a deliberate scoping choice, not an
-  oversight.
+- **A plain member can still view and edit their own settings, obviously
+  - the role model is about what they can do to other people's/the
+  org's shared resources, not their own account.** Stated explicitly
+  because it's easy to misread "members have less power" as broader
+  than it is: a member's own notification prefs, 2FA, webhook URL, etc.
+  are theirs regardless of org role.
 - **A status page still can't be moved between personal and org
   ownership after creation** (monitors can now - see "Recent changes").
   `status_pages.organization_id` is set once, at creation, through the
@@ -150,6 +149,37 @@ default, not a broken one.
   routing/TLS on this app's end.
 
 ## Recent changes
+
+- **Member role is now actually enforced on managing monitors and
+  status pages, not just on org membership itself.** This closed the
+  gap flagged in the original Tier 2 write-up: a plain member could
+  previously see AND edit/delete/snooze/rescan/manage-sharing on any
+  monitor in their org, which defeated the point of having roles at
+  all - "member" and "admin" behaved identically everywhere except org
+  management (invites, role changes, removal) and creating brand-new
+  monitors.
+
+  `monitors.js` gained `loadMonitorForMutation()`: every mutating route
+  (PATCH, DELETE, snooze/unsnooze, security/DNS/certificate re-run,
+  event acknowledgment, and all three share-link routes) now calls it
+  first and gets a monitor row back only if the requester is either the
+  monitor's own creator or admin+ on the org that owns it - otherwise a
+  403, not a silent no-op. `statusPages.js` got the equivalent
+  `loadStatusPageForMutation()` for its PATCH/regenerate/DELETE routes.
+  Every read-only route (the list, checks, incidents, uptime, TLS/DNS/
+  certificate data, etc.) is untouched - a member still sees everything
+  and still gets paged for everything, which is the actual point of
+  being on a team. Bulk actions (`snooze-all`, `unsnooze-all`, the
+  manual "check now" button) were already scoped to a user's own
+  monitors, personal ownership included, and didn't need this.
+
+  This surfaced a real pre-existing bug while fixing it: the manual
+  DNS/certificate re-check routes scoped their underlying sweep by
+  `userId`, which would have silently matched zero rows (and done
+  nothing) the moment an org admin who wasn't a monitor's creator tried
+  to use them - `runDnsSweep`/`runCtSweep` in `checkRunner.js` gained a
+  `monitorId` option that scopes by the specific monitor instead, which
+  is what these two routes actually needed all along.
 
 - **An existing monitor can now be moved into (or out of) an org.**
   Closes the gap where being added to an org didn't retroactively grant

@@ -550,14 +550,24 @@ export async function scanAndRecord(monitor) {
 // tighter cadence than the scan sweep. Drift is the signal here where
 // the delay between "it changed" and "you found out" is the entire
 // value of the feature.
-export async function runDnsSweep({ userId = null, limit = MAX_DNS_CHECKS_PER_RUN } = {}) {
+export async function runDnsSweep({ userId = null, monitorId = null, limit = MAX_DNS_CHECKS_PER_RUN } = {}) {
   const conditions = [
     `active = true`,
     `monitor_type != 'tcp'`,
     `(dns_checked_at IS NULL OR dns_checked_at <= now() - interval '${DNS_CHECK_INTERVAL_HOURS} hours')`,
   ];
   const params = [];
-  if (userId) {
+  // monitorId (a specific monitor's own manual re-check) and userId (the
+  // per-user sweep) are mutually exclusive in practice - monitorId wins
+  // if both are somehow passed, since it's the more precise scope. Not
+  // filtering by user_id when a specific monitor is named matters for
+  // org-owned monitors: an admin re-checking a teammate's monitor isn't
+  // that monitor's user_id, so a user_id filter would silently match
+  // zero rows and look like the check did nothing.
+  if (monitorId) {
+    params.push(monitorId);
+    conditions.push(`id = $${params.length}`);
+  } else if (userId) {
     params.push(userId);
     conditions.push(`user_id = $${params.length}`);
   }
@@ -623,7 +633,7 @@ export async function runDnsSweep({ userId = null, limit = MAX_DNS_CHECKS_PER_RU
 // Certificate Transparency sweep
 // ---------------------------------------------------------------------
 
-export async function runCtSweep({ userId = null, limit = MAX_CT_CHECKS_PER_RUN } = {}) {
+export async function runCtSweep({ userId = null, monitorId = null, limit = MAX_CT_CHECKS_PER_RUN } = {}) {
   const conditions = [
     `active = true`,
     `ct_enabled = true`,
@@ -631,7 +641,13 @@ export async function runCtSweep({ userId = null, limit = MAX_CT_CHECKS_PER_RUN 
     `(ct_checked_at IS NULL OR ct_checked_at <= now() - interval '${CT_CHECK_INTERVAL_HOURS} hours')`,
   ];
   const params = [];
-  if (userId) {
+  // Same reasoning as runDnsSweep just above: a specific monitorId wins
+  // over the per-user scope, since an org admin re-checking a
+  // teammate's monitor isn't that monitor's user_id.
+  if (monitorId) {
+    params.push(monitorId);
+    conditions.push(`id = $${params.length}`);
+  } else if (userId) {
     params.push(userId);
     conditions.push(`user_id = $${params.length}`);
   }

@@ -74,24 +74,38 @@ router.post("/", async (req, res) => {
   }
 });
 
+// Gate for every route that changes a status page rather than just
+// reading it - same model as loadMonitorForMutation in monitors.js: the
+// page's own creator can always manage it, otherwise only admin+ on the
+// org that owns it.
+async function loadStatusPageForMutation(req, res) {
+  const { rows } = await pool.query(`SELECT * FROM status_pages WHERE id = $1`, [req.params.id]);
+  if (rows.length === 0) {
+    res.status(404).json({ error: "status page not found" });
+    return null;
+  }
+  const page = rows[0];
+  const isCreator = page.user_id === req.userId;
+  const isOrgAdmin = page.organization_id && (await requireOrgRole(req.userId, page.organization_id, "admin"));
+  if (!isCreator && !isOrgAdmin) {
+    res.status(403).json({ error: "admin access on this status page's organization is required for that" });
+    return null;
+  }
+  return page;
+}
+
 router.patch("/:id", async (req, res) => {
+  const page = await loadStatusPageForMutation(req, res);
+  if (!page) return;
   const { name, group_name, monitor_ids } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "name is required" });
   const selectionError = await validateSelection(req.userId, group_name, monitor_ids);
   if (selectionError) return res.status(400).json({ error: selectionError });
   const { rows } = await pool.query(
-    `UPDATE status_pages SET name = $3, group_name = $4, monitor_ids = $5, updated_at = now()
-     WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))
-     RETURNING *`,
-    [
-      req.params.id,
-      req.userId,
-      name.trim(),
-      group_name?.trim() || null,
-      monitor_ids?.length ? JSON.stringify(monitor_ids) : null,
-    ]
+    `UPDATE status_pages SET name = $2, group_name = $3, monitor_ids = $4, updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [req.params.id, name.trim(), group_name?.trim() || null, monitor_ids?.length ? JSON.stringify(monitor_ids) : null]
   );
-  if (rows.length === 0) return res.status(404).json({ error: "status page not found" });
   res.json(rows[0]);
 });
 
@@ -99,24 +113,19 @@ router.patch("/:id", async (req, res) => {
 // same write, so the old link stops resolving the instant the new one
 // exists rather than both being live for any window.
 router.post("/:id/regenerate", async (req, res) => {
+  const page = await loadStatusPageForMutation(req, res);
+  if (!page) return;
   const { rows } = await pool.query(
-    `UPDATE status_pages SET share_token = $3, updated_at = now()
-     WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))
-     RETURNING *`,
-    [req.params.id, req.userId, generateShareToken()]
+    `UPDATE status_pages SET share_token = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [req.params.id, generateShareToken()]
   );
-  if (rows.length === 0) return res.status(404).json({ error: "status page not found" });
   res.json(rows[0]);
 });
 
 router.delete("/:id", async (req, res) => {
-  const { rows } = await pool.query(
-    `DELETE FROM status_pages
-     WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))
-     RETURNING id`,
-    [req.params.id, req.userId]
-  );
-  if (rows.length === 0) return res.status(404).json({ error: "status page not found" });
+  const page = await loadStatusPageForMutation(req, res);
+  if (!page) return;
+  await pool.query(`DELETE FROM status_pages WHERE id = $1`, [req.params.id]);
   res.json({ ok: true });
 });
 

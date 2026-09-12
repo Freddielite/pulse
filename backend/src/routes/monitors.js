@@ -9,6 +9,34 @@ import { requireOrgRole, logOrgAction } from "../lib/orgAccess.js";
 const router = Router();
 router.use(requireAuth);
 
+// Gate for every route that changes a monitor rather than just reading
+// it: the monitor's own creator can always manage it, and otherwise
+// only admin+ on the org that owns it - a plain member can see a
+// monitor and get paged by it (that's the whole point of being on the
+// team) without being able to edit, delete, snooze, rescan, or manage
+// its share link. Distinct from the broadened SELECT/UPDATE/DELETE
+// WHERE clauses used throughout this file, which grant every member
+// read access (and, as a defense-in-depth backstop, still scope every
+// query to rows the requester has SOME relationship to) - this is the
+// actual permission check, run before the mutation itself, so a member
+// without access gets a clear 403 rather than a query that silently
+// matches zero rows.
+async function loadMonitorForMutation(req, res) {
+  const { rows } = await pool.query(`SELECT * FROM monitors WHERE id = $1`, [req.params.id]);
+  if (rows.length === 0) {
+    res.status(404).json({ error: "monitor not found" });
+    return null;
+  }
+  const monitor = rows[0];
+  const isCreator = monitor.user_id === req.userId;
+  const isOrgAdmin = monitor.organization_id && (await requireOrgRole(req.userId, monitor.organization_id, "admin"));
+  if (!isCreator && !isOrgAdmin) {
+    res.status(403).json({ error: "admin access on this monitor's organization is required for that" });
+    return null;
+  }
+  return monitor;
+}
+
 // monitor_type as sent by the client, coerced to one of the three real
 // values. Anything unrecognized falls back to 'http' - the safe default,
 // since an http monitor's steps/tcp target are simply ignored rather
@@ -184,6 +212,8 @@ router.post("/", async (req, res) => {
 });
 
 router.patch("/:id", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   const {
     name, url, method, expected_status, auth_header_name, auth_header_value, check_interval_min, keep_alive_target,
     active, group_name, body_contains, alert_after_failures, content_diff_enabled, monitor_type, synthetic_steps, check_timeout_sec,
@@ -212,18 +242,14 @@ router.patch("/:id", async (req, res) => {
     }
   }
   // Moving a monitor between personal and org ownership (or between two
-  // orgs) is deliberately narrower than every other field here: only
-  // the monitor's own creator can do it - not just any member with
-  // access to it via the broadened ownership clause below - and moving
-  // it INTO an org additionally needs admin+ there, same bar as
-  // creating a new monitor under that org. Checked before the main
-  // UPDATE runs rather than folded into its WHERE clause, since the
-  // failure needs a clear, distinct error rather than a silent no-op
-  // 404 that would look like the monitor didn't exist.
+  // orgs) is deliberately narrower than the general admin+ gate above:
+  // only the monitor's own creator can do it at all - an org admin who
+  // didn't create this particular monitor can edit/delete it, but can't
+  // reassign it away from wherever its creator put it. Moving it INTO
+  // an org additionally needs admin+ there, same bar as creating a new
+  // monitor under that org.
   if (organization_id !== undefined) {
-    const { rows: existing } = await pool.query(`SELECT user_id FROM monitors WHERE id = $1`, [req.params.id]);
-    if (existing.length === 0) return res.status(404).json({ error: "monitor not found" });
-    if (existing[0].user_id !== req.userId) {
+    if (monitor.user_id !== req.userId) {
       return res.status(403).json({ error: "only the monitor's creator can move it between personal and organization ownership" });
     }
     if (organization_id) {
@@ -318,23 +344,25 @@ router.patch("/:id", async (req, res) => {
 // null", which unsnoozing needs. A dedicated pair of action endpoints
 // sidesteps that ambiguity entirely.
 router.post("/:id/snooze", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   const minutes = Number(req.body.minutes);
   if (!minutes || minutes <= 0) return res.status(400).json({ error: "minutes must be a positive number" });
   const { rows } = await pool.query(
-    `UPDATE monitors SET snoozed_until = now() + ($3 || ' minutes')::interval, updated_at = now()
-     WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2)) RETURNING *`,
-    [req.params.id, req.userId, minutes]
+    `UPDATE monitors SET snoozed_until = now() + ($2 || ' minutes')::interval, updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [req.params.id, minutes]
   );
-  if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
   res.json(rows[0]);
 });
 
 router.post("/:id/unsnooze", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   const { rows } = await pool.query(
-    `UPDATE monitors SET snoozed_until = NULL, updated_at = now() WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2)) RETURNING *`,
-    [req.params.id, req.userId]
+    `UPDATE monitors SET snoozed_until = NULL, updated_at = now() WHERE id = $1 RETURNING *`,
+    [req.params.id]
   );
-  if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
   res.json(rows[0]);
 });
 
@@ -363,11 +391,9 @@ router.post("/unsnooze-all", async (req, res) => {
 });
 
 router.delete("/:id", async (req, res) => {
-  const { rows } = await pool.query(
-    `DELETE FROM monitors WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2)) RETURNING id`,
-    [req.params.id, req.userId]
-  );
-  if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
+  await pool.query(`DELETE FROM monitors WHERE id = $1`, [req.params.id]);
   res.json({ ok: true });
 });
 
@@ -413,9 +439,8 @@ router.get("/:id/security", async (req, res) => {
 // automatic sweep would - there's no second path that quietly skips the
 // diffing.
 router.post("/:id/security/run", async (req, res) => {
-  const owns = await pool.query(`SELECT * FROM monitors WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))`, [req.params.id, req.userId]);
-  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
-  const monitor = owns.rows[0];
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   if (monitor.monitor_type === "tcp") {
     return res.status(400).json({ error: "Security scanning doesn't apply to a TCP monitor - there's no HTTP response to check headers on." });
   }
@@ -459,13 +484,11 @@ router.get("/:id/security/events", async (req, res) => {
 // and a client report is worth more when it shows what happened and that
 // it was dealt with, not just what's currently outstanding.
 router.post("/:id/security/events/:eventId/acknowledge", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   const { rows } = await pool.query(
-    `UPDATE security_events e SET acknowledged = true
-     FROM monitors m
-     WHERE e.id = $1 AND e.monitor_id = m.id AND m.id = $2
-       AND (m.user_id = $3 OR m.organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $3))
-     RETURNING e.*`,
-    [req.params.eventId, req.params.id, req.userId]
+    `UPDATE security_events SET acknowledged = true WHERE id = $1 AND monitor_id = $2 RETURNING *`,
+    [req.params.eventId, req.params.id]
   );
   if (rows.length === 0) return res.status(404).json({ error: "event not found" });
   res.json(rows[0]);
@@ -499,17 +522,14 @@ router.get("/:id/dns", async (req, res) => {
 });
 
 router.post("/:id/dns/run", async (req, res) => {
-  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))`, [req.params.id, req.userId]);
-  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   // Reuses the sweep rather than duplicating its drift-detection logic,
   // scoped to this one monitor by clearing its due-clock first. Same
   // reasoning as routing the manual scan through scanAndRecord.
   await pool.query(`UPDATE monitors SET dns_checked_at = NULL WHERE id = $1`, [req.params.id]);
-  await runDnsSweep({ userId: req.userId, limit: 1 });
-  const { rows } = await pool.query(
-    `SELECT dns_snapshot, dns_checked_at FROM monitors WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))`,
-    [req.params.id, req.userId]
-  );
+  await runDnsSweep({ monitorId: req.params.id, limit: 1 });
+  const { rows } = await pool.query(`SELECT dns_snapshot, dns_checked_at FROM monitors WHERE id = $1`, [req.params.id]);
   res.json(rows[0]);
 });
 
@@ -560,10 +580,10 @@ router.get("/:id/certificates", async (req, res) => {
 });
 
 router.post("/:id/certificates/run", async (req, res) => {
-  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))`, [req.params.id, req.userId]);
-  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   await pool.query(`UPDATE monitors SET ct_checked_at = NULL WHERE id = $1`, [req.params.id]);
-  const checked = await runCtSweep({ userId: req.userId, limit: 1 });
+  const checked = await runCtSweep({ monitorId: req.params.id, limit: 1 });
   if (checked === 0) {
     return res.status(502).json({ error: "The Certificate Transparency lookup didn't complete - crt.sh may be slow or unavailable right now. Try again shortly." });
   }
@@ -598,13 +618,13 @@ router.get("/:id/uptime", async (req, res) => {
 // rotating it out from under whoever already has it. Regenerate is the
 // explicit, separate action for actually invalidating an old link.
 router.post("/:id/share", async (req, res) => {
-  const owns = await pool.query(`SELECT share_token FROM monitors WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))`, [req.params.id, req.userId]);
-  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
-  if (owns.rows[0].share_token) return res.json({ share_token: owns.rows[0].share_token });
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
+  if (monitor.share_token) return res.json({ share_token: monitor.share_token });
   try {
     const { rows } = await pool.query(
-      `UPDATE monitors SET share_token = $3, updated_at = now() WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2)) RETURNING share_token`,
-      [req.params.id, req.userId, generateShareToken()]
+      `UPDATE monitors SET share_token = $2, updated_at = now() WHERE id = $1 RETURNING share_token`,
+      [req.params.id, generateShareToken()]
     );
     res.json({ share_token: rows[0].share_token });
   } catch (err) {
@@ -617,12 +637,13 @@ router.post("/:id/share", async (req, res) => {
 // previous link stops resolving the instant the new one exists - no
 // window where both are live.
 router.post("/:id/share/regenerate", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
   try {
     const { rows } = await pool.query(
-      `UPDATE monitors SET share_token = $3, updated_at = now() WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2)) RETURNING share_token`,
-      [req.params.id, req.userId, generateShareToken()]
+      `UPDATE monitors SET share_token = $2, updated_at = now() WHERE id = $1 RETURNING share_token`,
+      [req.params.id, generateShareToken()]
     );
-    if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
     res.json({ share_token: rows[0].share_token });
   } catch (err) {
     console.error(err);
@@ -631,11 +652,9 @@ router.post("/:id/share/regenerate", async (req, res) => {
 });
 
 router.delete("/:id/share", async (req, res) => {
-  const { rows } = await pool.query(
-    `UPDATE monitors SET share_token = NULL, updated_at = now() WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2)) RETURNING id`,
-    [req.params.id, req.userId]
-  );
-  if (rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
+  await pool.query(`UPDATE monitors SET share_token = NULL, updated_at = now() WHERE id = $1`, [req.params.id]);
   res.json({ ok: true });
 });
 
