@@ -3,6 +3,8 @@ import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { getUserOrgRole, requireOrgRole, logOrgAction } from "../lib/orgAccess.js";
 import { sendAlertEmail } from "../lib/mailer.js";
+import { sendTelegramMessage, resolveChatId } from "../lib/telegram.js";
+import { sendWebhookAlert } from "../lib/webhook.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -150,7 +152,7 @@ router.post("/:id/invite", async (req, res) => {
 
   try {
     const [{ rows: existingUser }, { rows: orgRows }, { rows: inviterRows }] = await Promise.all([
-      pool.query(`SELECT id FROM users WHERE email = $1`, [email]),
+      pool.query(`SELECT id, telegram_chat_id, webhook_url FROM users WHERE email = $1`, [email]),
       pool.query(`SELECT name FROM organizations WHERE id = $1`, [req.params.id]),
       pool.query(`SELECT email FROM users WHERE id = $1`, [req.userId]),
     ]);
@@ -185,11 +187,40 @@ router.post("/:id/invite", async (req, res) => {
     const action = hasAccount
       ? `Log in to Pulse${appUrl ? ` at ${appUrl}` : ""} to see it under Settings > Organizations.`
       : `Sign up at${appUrl ? ` ${appUrl}` : " Pulse"} with this same email address (${email}) to accept - the invite is waiting for that address specifically.`;
+    const title = `${inviterEmail} invited you to ${orgName} on Pulse`;
+    const body = `You've been added as a${role === "admin" ? "n" : ""} ${role}. ${action}`;
     sendAlertEmail({
       to: email,
-      subject: `${inviterEmail} invited you to ${orgName} on Pulse`,
+      subject: title,
       text: `${inviterEmail} added you to "${orgName}" as a${role === "admin" ? "n" : ""} ${role} on Pulse, an uptime and security monitoring tool. ${action}`,
     }).catch((err) => console.error("invite email failed:", err.message));
+
+    // Only possible for someone who already has a Pulse account - a
+    // brand-new invitee has no telegram_chat_id or webhook_url to send
+    // to yet, since those are things a person sets up themselves after
+    // signing in. Not gated behind wantsNotification(): none of the
+    // existing event kinds (down/degraded/contentChanged/expiring/
+    // security) actually describes "you were added to a team", and
+    // forcing it under one - "security" being the closest fit - would
+    // mean someone who muted security alerts on their monitors also
+    // never hears about being invited to one, for an unrelated reason.
+    // This fires once per invite, not on a recurring cadence, so it
+    // isn't the kind of noise those toggles exist to control.
+    if (hasAccount) {
+      const invitedUser = existingUser[0];
+      // Same as every other call site in this app - sendTelegramMessage
+      // and sendWebhookAlert already no-op safely on their own (no bot
+      // token, no chat id, no saved URL), so this doesn't gate on those
+      // being present first; doing so here would also incorrectly skip
+      // a deployment-wide TELEGRAM_CHAT_ID (see resolveChatId) just
+      // because this particular user never set their own.
+      sendTelegramMessage({ chatId: resolveChatId(invitedUser), text: `👋 ${title}\n${body}` }).catch((err) =>
+        console.error("invite telegram notify failed:", err.message)
+      );
+      sendWebhookAlert(invitedUser.webhook_url, { event: "org_invite", severity: "info", title, body }).catch((err) =>
+        console.error("invite webhook notify failed:", err.message)
+      );
+    }
 
     await logOrgAction(req.params.id, req.userId, "member_invited", `invited ${email} as ${role}`);
     res.status(201).json({ ok: true });

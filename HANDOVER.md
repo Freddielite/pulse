@@ -54,7 +54,7 @@ curls the same URL works identically.
 | `SIGNUP_CODE` | Recommended | Gate signup so randoms can't create accounts on your instance |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | For push | Generate with `npm run gen-vapid` in `backend/` |
 | `VAPID_SUBJECT` | For push | `mailto:you@example.com` |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | For email | Any SMTP provider. Gmail app password, Resend, Mailgun, etc. |
+| `BREVO_API_KEY` / `EMAIL_FROM` / `EMAIL_FROM_NAME` | For email | Free API key from [Brevo](https://app.brevo.com) (300 emails/day on the free plan) plus a sender address verified in Brevo's dashboard. `EMAIL_FROM_NAME` is optional, defaults to "Pulse". Replaced SMTP entirely - see the "Email switched from SMTP to Brevo" entry under Recent changes for why. |
 | `TELEGRAM_BOT_TOKEN` | For Telegram | One bot for the whole instance, from [@BotFather](https://t.me/BotFather). |
 | `TELEGRAM_CHAT_ID` | Optional, for Telegram | Hardcodes a single destination chat for the whole deployment. Simplest setup for a single-user instance - set this and skip per-user chat IDs entirely. If unset, falls back to each user's own `telegram_chat_id` (see below), for deployments with more than one account. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | For blacklist checks | Free from the Google Cloud Console (enable the Safe Browsing API). Without it, `blacklist_status` stays `NULL` on every monitor rather than reading as a false "clean" - see lib/blacklistCheck.js. |
@@ -150,6 +150,27 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Email switched from SMTP to Brevo's HTTP API.** `lib/mailer.js` used
+  nodemailer over SMTP, which looked correctly configured (right host,
+  port, credentials) but never actually worked once this app landed on
+  a free Render web service: Render blocks all outbound traffic on SMTP
+  ports (25, 465, 587) on free instances (since Sept 2025) specifically
+  to stop them being used for spam - so nodemailer's connection attempt
+  just hung until it timed out, completely independent of whether the
+  SMTP setup itself was right. Every "Connection timeout" in the logs
+  was that block, not a config mistake.
+
+  Replaced with a plain HTTPS POST to Brevo's transactional email API
+  (`https://api.brevo.com/v3/smtp/email`) - same reasoning as
+  lib/telegram.js and lib/webhook.js, a fetch call needs no SDK. HTTPS
+  on port 443 isn't part of Render's block, so this works identically on
+  a free instance. `sendAlertEmail({ to, subject, text })` kept the exact
+  same signature, so every call site across the app (checkRunner.js,
+  digest.js, securityEvents.js, breachCheck.js, organizations.js) needed
+  no changes at all. Needs `BREVO_API_KEY` and `EMAIL_FROM` (a sender
+  address verified in Brevo's dashboard) - the old `SMTP_*` vars can be
+  removed from Render, they're no longer read anywhere.
+
 - **Org invites now actually send an email, and logos can be uploaded
   instead of just linked.** Two gaps found in real use of Tier 2.
 
@@ -172,10 +193,18 @@ default, not a broken one.
   slowly). Fixed by not awaiting it: the response goes back the instant
   the membership row is written, and the email fires in the background
   with its own `.catch` so a slow or failing send can't affect the
-  invite itself. If invites still aren't arriving after this fix, that's
-  no longer a timeout - it means SMTP is misconfigured or unreachable;
-  check Render's logs for the `invite email failed:` line the catch
-  logs, and double check `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`.
+  invite itself. That fixed the timeout, but not delivery itself - see
+  the "Email switched from SMTP to Brevo" entry above for why SMTP
+  couldn't actually work on this deployment at all.
+
+  Also added: an invited person who already has a Pulse account gets
+  notified on their own already-connected Telegram and/or webhook, not
+  just email - reusing `sendTelegramMessage`/`sendWebhookAlert` exactly
+  as every alert path does, since those already no-op safely when
+  nothing's configured. This only works for existing accounts - a
+  brand-new invitee has no telegram_chat_id or webhook_url yet, since
+  those are things a person connects themselves after signing in, so
+  email is the only channel Pulse has for someone who isn't a user yet.
 
   Logo upload: there's no file-storage backend in this app (no
   S3/Cloudinary, and Render's own disk isn't persistent across deploys
