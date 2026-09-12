@@ -90,12 +90,11 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
           {!editing && organizations.length > 0 && (
             <div className="pl-field">
               <label>Owner</label>
-              <select value={organizationId} onChange={(e) => setOrganizationId(e.target.value)}>
-                <option value="">Just me (personal)</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.id}>{org.name}</option>
-                ))}
-              </select>
+              <Dropdown
+                value={organizationId}
+                onChange={setOrganizationId}
+                options={[{ value: "", label: "Just me (personal)" }, ...organizations.map((org) => ({ value: org.id, label: org.name }))]}
+              />
             </div>
           )}
           <div className="pl-field">

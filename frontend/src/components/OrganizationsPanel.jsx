@@ -10,6 +10,7 @@ import {
   removeOrgMember,
 } from "../api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import Dropdown from "./Dropdown.jsx";
 
 const ROLE_LABEL = { owner: "Owner", admin: "Admin", member: "Member" };
 
@@ -131,11 +132,17 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
               <span>{m.email}</span>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {isOwner && m.role !== "owner" ? (
-                  <select value={m.role} onChange={(e) => handleRoleChange(m.id, e.target.value)} style={{ fontSize: 12 }}>
-                    <option value="member">Member</option>
-                    <option value="admin">Admin</option>
-                    <option value="owner">Owner</option>
-                  </select>
+                  <div style={{ width: 116 }}>
+                    <Dropdown
+                      value={m.role}
+                      onChange={(role) => handleRoleChange(m.id, role)}
+                      options={[
+                        { value: "member", label: "Member" },
+                        { value: "admin", label: "Admin" },
+                        { value: "owner", label: "Owner" },
+                      ]}
+                    />
+                  </div>
                 ) : (
                   <span style={{ color: "var(--ink-dim)", fontSize: 12 }}>{ROLE_LABEL[m.role]}</span>
                 )}
@@ -166,10 +173,16 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
             <label>Invite by email</label>
             <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required />
           </div>
-          <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} style={{ fontSize: 13 }}>
-            <option value="member">Member</option>
-            <option value="admin">Admin</option>
-          </select>
+          <div style={{ width: 130 }}>
+            <Dropdown
+              value={inviteRole}
+              onChange={setInviteRole}
+              options={[
+                { value: "member", label: "Member" },
+                { value: "admin", label: "Admin" },
+              ]}
+            />
+          </div>
           <button className="pl-btn pl-btn--sm" type="submit" disabled={inviteBusy}>
             {inviteBusy ? "Sending..." : "Invite"}
           </button>
