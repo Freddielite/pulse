@@ -165,6 +165,18 @@ default, not a broken one.
   created before this change won't retroactively get an email - cancel
   and re-send it from the org's Manage panel if the person needs it.
 
+  The first version of this awaited the email send before responding -
+  which turned the invite request itself into a 15-second-timeout risk,
+  since nodemailer can hang well past that on a slow or misconfigured
+  SMTP server (wrong host/port, network egress blocked, auth failing
+  slowly). Fixed by not awaiting it: the response goes back the instant
+  the membership row is written, and the email fires in the background
+  with its own `.catch` so a slow or failing send can't affect the
+  invite itself. If invites still aren't arriving after this fix, that's
+  no longer a timeout - it means SMTP is misconfigured or unreachable;
+  check Render's logs for the `invite email failed:` line the catch
+  logs, and double check `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`.
+
   Logo upload: there's no file-storage backend in this app (no
   S3/Cloudinary, and Render's own disk isn't persistent across deploys
   anyway), so rather than build one, `OrganizationsPanel.jsx` downscales

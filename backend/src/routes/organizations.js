@@ -171,20 +171,25 @@ router.post("/:id/invite", async (req, res) => {
     }
 
     // Membership itself never depended on this succeeding - the row
-    // above is already committed either way - so a missing SMTP config
-    // or a delivery failure doesn't block the invite, only the notice
-    // that it happened. FRONTEND_URL is optional: without it the email
-    // just tells the invitee to log into (or sign up for) Pulse rather
-    // than linking a specific URL this backend has no way to know.
+    // above is already committed either way. Deliberately NOT awaited:
+    // this request already timed out once with the email send in the
+    // critical path (nodemailer can hang well past the frontend's own
+    // 15s request timeout on a slow or misconfigured SMTP server), so
+    // the response goes back the moment membership is written and the
+    // email fires in the background - a slow or failed send no longer
+    // has any way to affect the invite itself. FRONTEND_URL is
+    // optional: without it the email just tells the invitee to log into
+    // (or sign up for) Pulse rather than linking a specific URL this
+    // backend has no way to know.
     const appUrl = process.env.FRONTEND_URL?.trim();
     const action = hasAccount
       ? `Log in to Pulse${appUrl ? ` at ${appUrl}` : ""} to see it under Settings > Organizations.`
       : `Sign up at${appUrl ? ` ${appUrl}` : " Pulse"} with this same email address (${email}) to accept - the invite is waiting for that address specifically.`;
-    await sendAlertEmail({
+    sendAlertEmail({
       to: email,
       subject: `${inviterEmail} invited you to ${orgName} on Pulse`,
       text: `${inviterEmail} added you to "${orgName}" as a${role === "admin" ? "n" : ""} ${role} on Pulse, an uptime and security monitoring tool. ${action}`,
-    });
+    }).catch((err) => console.error("invite email failed:", err.message));
 
     await logOrgAction(req.params.id, req.userId, "member_invited", `invited ${email} as ${role}`);
     res.status(201).json({ ok: true });
