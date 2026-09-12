@@ -193,6 +193,12 @@ router.post("/:id/invite", async (req, res) => {
       to: email,
       subject: title,
       text: `${inviterEmail} added you to "${orgName}" as a${role === "admin" ? "n" : ""} ${role} on Pulse, an uptime and security monitoring tool. ${action}`,
+      // A real button rather than a bare pasted URL - only possible
+      // once FRONTEND_URL is set; without it there's no URL to point a
+      // button at, so the email falls back to the plain-text
+      // instruction above with no link at all, not a broken one.
+      actionUrl: appUrl || undefined,
+      actionLabel: hasAccount ? "Open Pulse" : "Sign up to join",
     }).catch((err) => console.error("invite email failed:", err.message));
 
     // Only possible for someone who already has a Pulse account - a

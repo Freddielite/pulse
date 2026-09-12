@@ -150,6 +150,19 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Invite emails now render an actual button, not a bare pasted URL.**
+  `sendAlertEmail()` gained optional `actionUrl`/`actionLabel` params -
+  when present, it sends `htmlContent` (a simple styled button) alongside
+  the existing `textContent`, so clients that render HTML show a real
+  "Sign up to join" / "Open Pulse" button and clients that don't still
+  get the plain-text sentence with the link spelled out. Every other
+  call site is untouched - those params are optional, and every other
+  alert (down/degraded/security/etc.) has nothing actionable to link to
+  anyway. Still needs `FRONTEND_URL` set to have anything to point the
+  button at; without it the email correctly has no link at all rather
+  than a broken one - this doesn't require owning a custom domain, a
+  plain Vercel URL works fine as `FRONTEND_URL`.
+
 - **Email switched from SMTP to Brevo's HTTP API.** `lib/mailer.js` used
   nodemailer over SMTP, which looked correctly configured (right host,
   port, credentials) but never actually worked once this app landed on

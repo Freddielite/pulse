@@ -15,11 +15,37 @@
 const API_ROOT = "https://api.brevo.com/v3/smtp/email";
 const REQUEST_TIMEOUT_MS = 10000;
 
-export async function sendAlertEmail({ to, subject, text }) {
+export async function sendAlertEmail({ to, subject, text, actionUrl, actionLabel }) {
   const apiKey = process.env.BREVO_API_KEY;
   const fromEmail = process.env.EMAIL_FROM;
   if (!apiKey || !fromEmail) return { sent: false, reason: "Brevo not configured" };
   if (!to) return { sent: false, reason: "no recipient" };
+
+  const payload = {
+    sender: { email: fromEmail, name: process.env.EMAIL_FROM_NAME || "Pulse" },
+    to: [{ email: to }],
+    subject,
+    textContent: text,
+  };
+  // Optional - most alerts (down/degraded/security) are just informing
+  // someone of a fact, with nothing to click. actionUrl/actionLabel are
+  // for the handful that ARE actionable (an org invite: "join now"), so
+  // that one gets an actual styled button instead of a bare pasted URL
+  // buried in a paragraph. htmlContent and textContent aren't
+  // alternatives to each other in this API - most mail clients render
+  // whichever they support and fall back to the other, so both get
+  // sent whenever there's a link, keeping the plain-text version (with
+  // the raw URL spelled out) as the fallback for clients that don't
+  // render HTML.
+  if (actionUrl) {
+    payload.htmlContent = `<div style="font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1f1c;max-width:480px">
+      <p>${escapeHtml(text)}</p>
+      <p style="margin:24px 0">
+        <a href="${escapeHtml(actionUrl)}" style="display:inline-block;background:#3ddc84;color:#0a0f0d;font-weight:600;text-decoration:none;padding:10px 20px;border-radius:6px">${escapeHtml(actionLabel || "Open Pulse")}</a>
+      </p>
+      <p style="color:#8b96a3;font-size:12.5px">If the button doesn't work, copy this link: ${escapeHtml(actionUrl)}</p>
+    </div>`;
+  }
 
   try {
     const controller = new AbortController();
@@ -27,12 +53,7 @@ export async function sendAlertEmail({ to, subject, text }) {
     const response = await fetch(API_ROOT, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json", "api-key": apiKey },
-      body: JSON.stringify({
-        sender: { email: fromEmail, name: process.env.EMAIL_FROM_NAME || "Pulse" },
-        to: [{ email: to }],
-        subject,
-        textContent: text,
-      }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     }).finally(() => clearTimeout(timer));
 
@@ -46,4 +67,8 @@ export async function sendAlertEmail({ to, subject, text }) {
     console.error("Failed to send alert email:", err.message);
     return { sent: false, reason: err.message };
   }
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]));
 }
