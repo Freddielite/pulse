@@ -6,6 +6,7 @@ import { authRateLimit } from "../middleware/rateLimit.js";
 import { normalizeNotificationPrefs } from "../lib/notificationPrefs.js";
 import { generateSecret, otpauthUrl, verifyTotp, generateBackupCodes } from "../lib/totp.js";
 import { sendWebhookAlert } from "../lib/webhook.js";
+import { claimPendingInvites } from "../lib/orgAccess.js";
 
 const router = Router();
 
@@ -37,6 +38,9 @@ router.post("/signup", authRateLimit({ max: 5, windowMinutes: 60 }), async (req,
       [email.trim().toLowerCase(), hash, alert_email?.trim() || email.trim().toLowerCase()]
     );
     req.session.userId = rows[0].id;
+    // Claims any invite sent to this address before the account existed
+    // - see claimPendingInvites for why this has to happen exactly here.
+    await claimPendingInvites(rows[0].id, rows[0].email);
     res.status(201).json(rows[0]);
   } catch (err) {
     if (err.code === "23505") return res.status(409).json({ error: "an account with that email already exists" });

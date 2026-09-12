@@ -20,7 +20,10 @@ const EXPIRY_SOON_DAYS = 14;
 // "nothing to send" rather than sending an empty digest.
 async function buildDigest(user) {
   const { rows: monitors } = await pool.query(
-    `SELECT * FROM monitors WHERE user_id = $1 AND active = true ORDER BY name ASC`,
+    `SELECT * FROM monitors
+     WHERE active = true
+       AND (user_id = $1 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $1))
+     ORDER BY name ASC`,
     [user.id]
   );
   if (monitors.length === 0) return null;

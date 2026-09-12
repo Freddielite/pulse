@@ -495,5 +495,75 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS blacklist_status TEXT;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS blacklist_threats JSONB;
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS blacklist_checked_at TIMESTAMPTZ;
+
+    -- ===================================================================
+    -- Tier 2 additions: teams/orgs, white-label branding, trend history
+    -- ===================================================================
+
+    -- An organization is a shared owner for monitors and status pages -
+    -- an agency's account, effectively. Every account keeps working
+    -- exactly as before without ever creating one: monitors.organization_id
+    -- (below) is nullable, and a personal monitor with it NULL behaves
+    -- identically to how every monitor worked before this migration.
+    -- Branding fields live here rather than on individual monitors/status
+    -- pages, since the whole point is one look applied across everything
+    -- the org owns.
+    CREATE TABLE IF NOT EXISTS organizations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      brand_name TEXT,
+      brand_logo_url TEXT,
+      brand_accent_color TEXT,
+      -- Stored for display on branded reports/status pages, and as a
+      -- reminder of the setup this app doesn't automate: pointing an
+      -- actual domain at Pulse still needs the org's own DNS (a CNAME)
+      -- and Pulse-side host routing/TLS - neither of which this column
+      -- does by itself. See the note in HANDOVER.md.
+      custom_domain TEXT,
+      owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Membership is separate from ownership: owner_user_id above is who
+    -- can delete the org outright, while this table is who can see/use
+    -- it and at what role. A row with user_id NULL and invited_email set
+    -- is a pending invite - claimed (user_id filled in, invited_email
+    -- cleared) the moment someone signs up or already has an account
+    -- with that email, so an invite sent before someone has ever used
+    -- Pulse still works.
+    CREATE TABLE IF NOT EXISTS organization_members (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+      invited_email TEXT,
+      role TEXT NOT NULL DEFAULT 'member', -- owner | admin | member
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT member_identity_present CHECK (user_id IS NOT NULL OR invited_email IS NOT NULL)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_members_org_user ON organization_members(organization_id, user_id) WHERE user_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_members_org_invite ON organization_members(organization_id, invited_email) WHERE invited_email IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members(user_id);
+
+    -- "Who changed what" for an org - membership and monitor-ownership
+    -- changes only (not every field edit on every monitor, which would
+    -- just be the existing security_events/checks tables' job under a
+    -- different name). detail is a short human sentence, not a
+    -- structured diff - this is for a member asking "wait, who added
+    -- this?", not a compliance export.
+    CREATE TABLE IF NOT EXISTS org_audit_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      detail TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_org_audit_log_org_time ON org_audit_log(organization_id, created_at DESC);
+
+    -- Nullable, additive - see the organizations comment above for why
+    -- this is safe for every monitor/status page that predates it.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL;
+    ALTER TABLE status_pages ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_monitors_organization ON monitors(organization_id);
   `);
 }

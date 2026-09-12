@@ -63,13 +63,18 @@ export default function SharedStatusPageView({ token }) {
   }
 
   const allUp = page.monitors.every((m) => m.current_status === "up");
+  const brand = page.branding;
 
   return (
     <div className="pl-shell">
       <div className="pl-header">
         <div className="pl-brand">
-          <BrandMark />
-          Pulse
+          {brand?.brand_logo_url ? (
+            <img src={brand.brand_logo_url} alt="" width={24} height={24} style={{ borderRadius: 6, objectFit: "cover" }} />
+          ) : (
+            <BrandMark />
+          )}
+          {brand?.brand_name?.trim() || "Pulse"}
         </div>
       </div>
 
@@ -79,7 +84,13 @@ export default function SharedStatusPageView({ token }) {
         </div>
         <span
           className={`pl-badge ${allUp ? "pl-badge--signal" : "pl-badge--amber"}`}
-          style={!allUp ? { background: "var(--alert-dim)", color: "var(--alert)" } : undefined}
+          style={
+            !allUp
+              ? { background: "var(--alert-dim)", color: "var(--alert)" }
+              : brand?.brand_accent_color
+                ? { background: `${brand.brand_accent_color}22`, color: brand.brand_accent_color }
+                : undefined
+          }
         >
           {allUp ? "All systems operational" : "Attention needed"}
         </span>
@@ -117,7 +128,9 @@ export default function SharedStatusPageView({ token }) {
         ))
       )}
 
-      <div style={{ textAlign: "center", fontSize: 11, color: "var(--ink-faint)", margin: "24px 0 8px" }}>Powered by Pulse</div>
+      {!brand?.brand_name && (
+        <div style={{ textAlign: "center", fontSize: 11, color: "var(--ink-faint)", margin: "24px 0 8px" }}>Powered by Pulse</div>
+      )}
     </div>
   );
 }

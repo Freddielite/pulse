@@ -20,6 +20,7 @@ import { sendAlertEmail } from "./mailer.js";
 import { sendTelegramMessage, resolveChatId } from "./telegram.js";
 import { sendWebhookAlert } from "./webhook.js";
 import { wantsNotification } from "./notificationPrefs.js";
+import { getNotifiableUsers } from "./orgAccess.js";
 
 // Severities at or above this actually notify. Everything else is
 // recorded to the timeline and shows up in the UI, but doesn't interrupt
@@ -75,9 +76,7 @@ export async function recordSecurityEvent(monitor, event) {
 }
 
 async function notifySecurityEvent(monitor, event) {
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
 
   const icon = SEVERITY_ICON[event.severity] || "⚠️";
   const title = `${monitor.name}: ${event.title}`;
@@ -85,20 +84,24 @@ async function notifySecurityEvent(monitor, event) {
 
   // Same three channels, same order, same failure tolerance as every
   // other alert in this app - a misconfigured SMTP server shouldn't stop
-  // the push notification that already went out from counting.
-  if (wantsNotification(user, "push", "security")) {
-    await sendPushToUser(monitor.user_id, { title, body: body.slice(0, 240), url: `/monitors/${monitor.id}` });
-  }
-  await sendAlertEmail({
-    to: user.alert_email,
-    subject: `Pulse security: ${title}`,
-    text: `${body}\n\nMonitor: ${monitor.name}\nURL: ${monitor.url}`,
-  });
-  if (wantsNotification(user, "telegram", "security")) {
-    await sendTelegramMessage({ chatId: resolveChatId(user), text: `${icon} ${title}\n${body}\n\n${monitor.url}` });
-  }
-  if (wantsNotification(user, "webhook", "security")) {
-    await sendWebhookAlert(user.webhook_url, { event: "security", severity: event.severity, title, body, monitor });
+  // the push notification that already went out from counting. Looped
+  // over every notifiable user rather than just monitor.user_id, so an
+  // org-owned monitor pages the whole team, not just whoever created it.
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "security")) {
+      await sendPushToUser(user.id, { title, body: body.slice(0, 240), url: `/monitors/${monitor.id}` });
+    }
+    await sendAlertEmail({
+      to: user.alert_email,
+      subject: `Pulse security: ${title}`,
+      text: `${body}\n\nMonitor: ${monitor.name}\nURL: ${monitor.url}`,
+    });
+    if (wantsNotification(user, "telegram", "security")) {
+      await sendTelegramMessage({ chatId: resolveChatId(user), text: `${icon} ${title}\n${body}\n\n${monitor.url}` });
+    }
+    if (wantsNotification(user, "webhook", "security")) {
+      await sendWebhookAlert(user.webhook_url, { event: "security", severity: event.severity, title, body, monitor });
+    }
   }
 }
 

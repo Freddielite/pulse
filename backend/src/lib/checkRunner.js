@@ -14,6 +14,7 @@ import { fetchCtCertificates, recentlyIssued, normalizeIssuer } from "./ctLogs.j
 import { checkBlacklist, blacklistCheckConfigured } from "./blacklistCheck.js";
 import { recordSecurityEvent, diffScans } from "./securityEvents.js";
 import { wantsNotification } from "./notificationPrefs.js";
+import { getNotifiableUsers } from "./orgAccess.js";
 
 // How often the (best-effort, rate-limited) cert/domain check runs per
 // monitor. Far coarser than the uptime check: a handshake + WHOIS lookup
@@ -706,55 +707,55 @@ export async function runCtSweep({ userId = null, limit = MAX_CT_CHECKS_PER_RUN 
 }
 
 async function alertDown(monitor, result, incidentId) {
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
   const title = `${monitor.name} is down`;
   const body = result.errorMessage || "Check failed.";
-  if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
-  if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "down", severity: "high", title, body, monitor });
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "down")) await sendPushToUser(user.id, { title, body, url: `/monitors/${monitor.id}` });
+    await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+    if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+    if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "down", severity: "high", title, body, monitor });
+  }
 }
 
 async function alertStillDown(monitor, result, incident) {
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
   const downtimeMs = Date.now() - new Date(incident.started_at).getTime();
   const hours = Math.round(downtimeMs / 3600000);
   const title = `${monitor.name} is still down`;
   const body = `Down for about ${hours} hour${hours === 1 ? "" : "s"} now. Latest: ${result.errorMessage || "Check failed."}`;
-  if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
-  if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "still_down", severity: "high", title, body, monitor });
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "down")) await sendPushToUser(user.id, { title, body, url: `/monitors/${monitor.id}` });
+    await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+    if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+    if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "still_down", severity: "high", title, body, monitor });
+  }
 }
 
 async function alertRecovered(monitor, incident) {
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
   const downtimeMs = Date.now() - new Date(incident.started_at).getTime();
   const minutes = Math.round(downtimeMs / 60000);
   const title = `${monitor.name} is back up`;
   const body = `Was down for about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
-  if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
-  if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}\n${body}` });
-  if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "recovered", severity: "info", title, body, monitor });
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "down")) await sendPushToUser(user.id, { title, body, url: `/monitors/${monitor.id}` });
+    await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
+    if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}\n${body}` });
+    if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "recovered", severity: "info", title, body, monitor });
+  }
 }
 
 async function alertContentChanged(monitor) {
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
   const title = `${monitor.name} content changed`;
   const body = "The page's content changed since the last check. If this was an expected deploy, no action needed - the new content is now the baseline for future comparisons.";
-  if (wantsNotification(user, "push", "contentChanged")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  if (wantsNotification(user, "telegram", "contentChanged")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `📝 ${title}\n${body}\n\n${monitor.url}` });
-  if (wantsNotification(user, "webhook", "contentChanged")) await sendWebhookAlert(user.webhook_url, { event: "content_changed", severity: "medium", title, body, monitor });
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "contentChanged")) await sendPushToUser(user.id, { title, body, url: `/monitors/${monitor.id}` });
+    await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+    if (wantsNotification(user, "telegram", "contentChanged")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `📝 ${title}\n${body}\n\n${monitor.url}` });
+    if (wantsNotification(user, "webhook", "contentChanged")) await sendWebhookAlert(user.webhook_url, { event: "content_changed", severity: "medium", title, body, monitor });
+  }
 }
 
 // Lighter than alertDown: no incident row, no repeat "still degraded"
@@ -762,27 +763,27 @@ async function alertContentChanged(monitor) {
 // since a 200 that's merely slow isn't the same class of problem as an
 // actual outage.
 async function alertDegraded(monitor, result) {
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
   const title = `${monitor.name} is responding slowly`;
   const body = `Response time is ${result.responseMs}ms, above the ${monitor.degraded_threshold_ms}ms threshold for ${monitor.alert_after_slow || 3} checks in a row. Still returning a valid response - not down.`;
-  if (wantsNotification(user, "push", "degraded")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
-  if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟡 ${title}\n${body}\n\n${monitor.url}` });
-  if (wantsNotification(user, "webhook", "degraded")) await sendWebhookAlert(user.webhook_url, { event: "degraded", severity: "medium", title, body, monitor });
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "degraded")) await sendPushToUser(user.id, { title, body, url: `/monitors/${monitor.id}` });
+    await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
+    if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟡 ${title}\n${body}\n\n${monitor.url}` });
+    if (wantsNotification(user, "webhook", "degraded")) await sendWebhookAlert(user.webhook_url, { event: "degraded", severity: "medium", title, body, monitor });
+  }
 }
 
 async function alertNoLongerDegraded(monitor) {
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
   const title = `${monitor.name} is back to normal speed`;
   const body = "Response time is back under the slow threshold.";
-  if (wantsNotification(user, "push", "degraded")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
-  if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}` });
-  if (wantsNotification(user, "webhook", "degraded")) await sendWebhookAlert(user.webhook_url, { event: "degraded_recovered", severity: "info", title, body, monitor });
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "degraded")) await sendPushToUser(user.id, { title, body, url: `/monitors/${monitor.id}` });
+    await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
+    if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}` });
+    if (wantsNotification(user, "webhook", "degraded")) await sendWebhookAlert(user.webhook_url, { event: "degraded_recovered", severity: "info", title, body, monitor });
+  }
 }
 
 // Throttled to one nudge per calendar day per monitor+kind, so a 14-day
@@ -797,14 +798,14 @@ async function alertExpiringSoon(monitor, kind, expiresAt) {
   }
   expiryAlertedToday.add(cacheKey);
 
-  const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [monitor.user_id]);
-  const user = userRows[0];
-  if (!user) return;
+  const notifiable = await getNotifiableUsers(monitor);
   const daysLeft = Math.ceil((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
   const title = `${kind} expiring soon`;
   const body = `${monitor.name}'s ${kind.toLowerCase()} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${expiresAt.toDateString()}).`;
-  if (wantsNotification(user, "push", "expiring")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
-  if (wantsNotification(user, "telegram", "expiring")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `⚠️ ${title}\n${body}` });
-  if (wantsNotification(user, "webhook", "expiring")) await sendWebhookAlert(user.webhook_url, { event: "expiring", severity: "medium", title, body, monitor });
+  for (const user of notifiable) {
+    if (wantsNotification(user, "push", "expiring")) await sendPushToUser(user.id, { title, body, url: `/monitors/${monitor.id}` });
+    await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
+    if (wantsNotification(user, "telegram", "expiring")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `⚠️ ${title}\n${body}` });
+    if (wantsNotification(user, "webhook", "expiring")) await sendWebhookAlert(user.webhook_url, { event: "expiring", severity: "medium", title, body, monitor });
+  }
 }

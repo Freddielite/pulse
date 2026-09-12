@@ -13,6 +13,7 @@ import {
   disable2fa,
 } from "../api.js";
 import { usePush } from "../hooks/usePush.js";
+import OrganizationsPanel from "./OrganizationsPanel.jsx";
 
 // Shared shape between the push and Telegram checkbox lists below - keep
 // in sync with DEFAULT_NOTIFICATION_PREFS in the backend's
@@ -589,6 +590,9 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
           </form>
         )}
       </div>
+
+      <div className="pl-section-label">Organizations</div>
+      <OrganizationsPanel toast={toast} />
 
       <div className="pl-section-label">Security</div>
       <div className="pl-panel">

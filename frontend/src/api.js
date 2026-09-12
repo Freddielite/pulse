@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_URL || "/api";
+export const BASE = import.meta.env.VITE_API_URL || "/api";
 
 async function apiFetch(path, options = {}) {
   const { timeoutMs = 15000, ...fetchOptions } = options;
@@ -103,3 +103,12 @@ export const getSharedMonitorChecks = (token, limit = 200) => apiFetch(`/public/
 export const getSharedMonitorUptime = (token) => apiFetch(`/public/monitors/${token}/uptime`);
 export const getSharedMonitorDailyUptime = (token, days = 90) => apiFetch(`/public/monitors/${token}/daily-uptime?days=${days}`);
 export const getSharedMonitorSecurity = (token) => apiFetch(`/public/monitors/${token}/security`);
+
+export const listOrganizations = () => apiFetch("/organizations");
+export const createOrganization = (name) => apiFetch("/organizations", { method: "POST", body: JSON.stringify({ name }) });
+export const getOrganization = (id) => apiFetch(`/organizations/${id}`);
+export const updateOrganization = (id, payload) => apiFetch(`/organizations/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const deleteOrganization = (id) => apiFetch(`/organizations/${id}`, { method: "DELETE" });
+export const inviteOrgMember = (id, email, role) => apiFetch(`/organizations/${id}/invite`, { method: "POST", body: JSON.stringify({ email, role }) });
+export const updateOrgMemberRole = (id, memberId, role) => apiFetch(`/organizations/${id}/members/${memberId}`, { method: "PATCH", body: JSON.stringify({ role }) });
+export const removeOrgMember = (id, memberId) => apiFetch(`/organizations/${id}/members/${memberId}`, { method: "DELETE" });

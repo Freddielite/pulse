@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusPage } from "../api.js";
+import { useEffect, useState } from "react";
+import { createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusPage, listOrganizations } from "../api.js";
 import { createPortal } from "react-dom";
 import Dropdown from "./Dropdown.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
@@ -18,6 +18,18 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
   const [monitorIds, setMonitorIds] = useState(new Set(page?.monitor_ids || []));
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Same creation-only org assignment as MonitorForm - see that
+  // component's comment for why this isn't offered on edit.
+  const [organizations, setOrganizations] = useState([]);
+  const [organizationId, setOrganizationId] = useState("");
+
+  useEffect(() => {
+    if (editing) return;
+    listOrganizations()
+      .then((orgs) => setOrganizations(orgs.filter((o) => o.role === "owner" || o.role === "admin")))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function toggleMonitor(id) {
     setMonitorIds((prev) => {
@@ -44,6 +56,7 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
       name: name.trim(),
       group_name: mode === "group" ? groupName : null,
       monitor_ids: mode === "manual" ? [...monitorIds] : null,
+      organization_id: !editing && organizationId ? organizationId : undefined,
     };
     try {
       if (editing) {
@@ -74,6 +87,17 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
             <label>Name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wyntek clients" required autoFocus />
           </div>
+          {!editing && organizations.length > 0 && (
+            <div className="pl-field">
+              <label>Owner</label>
+              <select value={organizationId} onChange={(e) => setOrganizationId(e.target.value)}>
+                <option value="">Just me (personal)</option>
+                {organizations.map((org) => (
+                  <option key={org.id} value={org.id}>{org.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="pl-field">
             <label>Which monitors</label>
             <Dropdown

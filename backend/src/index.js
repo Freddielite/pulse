@@ -12,6 +12,7 @@ import telegramRouter from "./routes/telegram.js";
 import tokensRouter from "./routes/tokens.js";
 import statusPagesRouter from "./routes/statusPages.js";
 import publicRouter from "./routes/public.js";
+import organizationsRouter from "./routes/organizations.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
 
 const app = express();
@@ -66,6 +67,7 @@ app.use("/api/telegram", telegramRouter);
 app.use("/api/tokens", tokensRouter);
 app.use("/api/status-pages", statusPagesRouter);
 app.use("/api/public", publicRouter);
+app.use("/api/organizations", organizationsRouter);
 
 const PORT = process.env.PORT || 4000;
 

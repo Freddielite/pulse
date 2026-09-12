@@ -73,13 +73,18 @@ export default function SharedMonitorView({ token }) {
   }
 
   const statusLabel = monitor.current_status === "up" ? "Operational" : monitor.current_status === "down" ? "Down" : "Unknown";
+  const brand = monitor.branding;
 
   return (
     <div className="pl-shell">
       <div className="pl-header">
         <div className="pl-brand">
-          <BrandMark />
-          Pulse
+          {brand?.brand_logo_url ? (
+            <img src={brand.brand_logo_url} alt="" width={24} height={24} style={{ borderRadius: 6, objectFit: "cover" }} />
+          ) : (
+            <BrandMark />
+          )}
+          {brand?.brand_name?.trim() || "Pulse"}
         </div>
       </div>
 
@@ -142,7 +147,9 @@ export default function SharedMonitorView({ token }) {
         )}
       </div>
 
-      <div style={{ textAlign: "center", fontSize: 11, color: "var(--ink-faint)", margin: "24px 0 8px" }}>Powered by Pulse</div>
+      {!brand?.brand_name && (
+        <div style={{ textAlign: "center", fontSize: 11, color: "var(--ink-faint)", margin: "24px 0 8px" }}>Powered by Pulse</div>
+      )}
     </div>
   );
 }

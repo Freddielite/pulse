@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { createMonitor, updateMonitor } from "../api.js";
+import { createMonitor, updateMonitor, listOrganizations } from "../api.js";
 import SyntheticStepsEditor from "./SyntheticStepsEditor.jsx";
 import Dropdown from "./Dropdown.jsx";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock.js";
@@ -36,6 +36,19 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [alertAfterSlow, setAlertAfterSlow] = useState(monitor?.alert_after_slow || 3);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Which org (if any) a new monitor belongs to - only offered on
+  // creation, since the backend doesn't yet support moving an existing
+  // monitor between personal and org ownership (see HANDOVER.md).
+  const [organizations, setOrganizations] = useState([]);
+  const [organizationId, setOrganizationId] = useState("");
+
+  useEffect(() => {
+    if (editing) return;
+    listOrganizations()
+      .then((orgs) => setOrganizations(orgs.filter((o) => o.role === "owner" || o.role === "admin")))
+      .catch(() => {}); // organizations are an optional convenience here - a fetch failure shouldn't block creating a monitor
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -78,6 +91,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       auth_probe_expect: authProbeExpect.trim() || "401,403",
       ct_enabled: ctEnabled,
       alert_after_slow: Number(alertAfterSlow) || 3,
+      organization_id: !editing && organizationId ? organizationId : undefined,
     };
     try {
       if (editing) {
@@ -230,6 +244,17 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               ))}
             </datalist>
           </div>
+          {!editing && organizations.length > 0 && (
+            <div className="pl-field">
+              <label>Owner</label>
+              <select value={organizationId} onChange={(e) => setOrganizationId(e.target.value)}>
+                <option value="">Just me (personal)</option>
+                {organizations.map((org) => (
+                  <option key={org.id} value={org.id}>{org.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {monitorType === "http" && (
             <div className="pl-field">
               <label>Response should contain (optional)</label>

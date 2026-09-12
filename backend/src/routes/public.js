@@ -10,7 +10,7 @@ const router = Router();
 
 async function findByToken(token) {
   const { rows } = await pool.query(
-    `SELECT id, name, url, monitor_type, check_interval_min, current_status, last_checked_at, last_response_ms, created_at
+    `SELECT id, name, url, monitor_type, check_interval_min, current_status, last_checked_at, last_response_ms, created_at, organization_id
      FROM monitors WHERE share_token = $1`,
     [token]
   );
@@ -26,7 +26,9 @@ const NOT_FOUND = { error: "This share link is invalid or has been revoked." };
 router.get("/monitors/:token", async (req, res) => {
   const monitor = await findByToken(req.params.token);
   if (!monitor) return res.status(404).json(NOT_FOUND);
-  res.json(monitor);
+  const branding = await resolveBranding(monitor.organization_id);
+  const { organization_id: _organizationId, ...publicMonitor } = monitor;
+  res.json({ ...publicMonitor, branding });
 });
 
 // Recent checks for the response-time trend line. Same narrowing as the
@@ -110,10 +112,20 @@ async function findStatusPageByToken(token) {
 }
 
 async function resolveStatusPageMonitors(page) {
+  // Broadened the same way monitor ownership is everywhere else: the
+  // page's own user_id is the anchor, but a monitor counts if it's
+  // personally owned by that user OR owned by any org they belong to -
+  // matching how validateSelection allowed it onto the page in the
+  // first place. Re-checked here (not just at creation) so a monitor
+  // that got removed from an org, or a page owner who left that org,
+  // stops appearing without anyone having to edit the page.
   if (page.group_name) {
     const { rows } = await pool.query(
       `SELECT id, name, url, monitor_type, current_status, last_checked_at, last_response_ms
-       FROM monitors WHERE user_id = $1 AND group_name = $2 AND active = true ORDER BY name ASC`,
+       FROM monitors
+       WHERE group_name = $2 AND active = true
+         AND (user_id = $1 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $1))
+       ORDER BY name ASC`,
       [page.user_id, page.group_name]
     );
     return rows;
@@ -122,17 +134,33 @@ async function resolveStatusPageMonitors(page) {
   if (ids.length === 0) return [];
   const { rows } = await pool.query(
     `SELECT id, name, url, monitor_type, current_status, last_checked_at, last_response_ms
-     FROM monitors WHERE id = ANY($1::uuid[]) AND user_id = $2 AND active = true ORDER BY name ASC`,
+     FROM monitors
+     WHERE id = ANY($1::uuid[]) AND active = true
+       AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))
+     ORDER BY name ASC`,
     [ids, page.user_id]
   );
   return rows;
 }
 
+// Branding for a status page or single-monitor share, when whatever it
+// belongs to has an organization attached - only the fields a public,
+// unauthenticated visitor should see (name/logo/color), never the
+// custom_domain setup detail or anything else about the org itself.
+async function resolveBranding(organizationId) {
+  if (!organizationId) return null;
+  const { rows } = await pool.query(
+    `SELECT brand_name, brand_logo_url, brand_accent_color FROM organizations WHERE id = $1`,
+    [organizationId]
+  );
+  return rows[0] || null;
+}
+
 router.get("/status-pages/:token", async (req, res) => {
   const page = await findStatusPageByToken(req.params.token);
   if (!page) return res.status(404).json(NOT_FOUND);
-  const monitors = await resolveStatusPageMonitors(page);
-  if (monitors.length === 0) return res.json({ name: page.name, monitors: [] });
+  const [monitors, branding] = await Promise.all([resolveStatusPageMonitors(page), resolveBranding(page.organization_id)]);
+  if (monitors.length === 0) return res.json({ name: page.name, monitors: [], branding });
 
   const ids = monitors.map((m) => m.id);
   const { rows: uptimeRows } = await pool.query(
@@ -154,6 +182,7 @@ router.get("/status-pages/:token", async (req, res) => {
 
   res.json({
     name: page.name,
+    branding,
     monitors: monitors.map((m) => ({
       ...m,
       uptime: {
@@ -163,6 +192,57 @@ router.get("/status-pages/:token", async (req, res) => {
       },
     })),
   });
+});
+
+// Embeddable trust badge - shields.io-style SVG, no JS needed on the
+// embedding page, so it renders anywhere an <img> tag works (a client's
+// own site, a README, a status-page link in an email signature). Pulled
+// from the same share-token-scoped data as the rest of this router, so
+// it can never expose more than an unauthenticated visitor could already
+// see on the public monitor page. Grade first, since that's the thing
+// worth bragging about; uptime as a secondary line.
+function escapeXml(value) {
+  return String(value).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[c]));
+}
+
+function badgeSvg({ label, grade, uptimePct, color }) {
+  const gradeText = grade || "-";
+  const uptimeText = uptimePct == null ? "no data" : `${uptimePct}% uptime`;
+  const width = 168;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="42" viewBox="0 0 ${width} 42" role="img" aria-label="${escapeXml(label)}: grade ${escapeXml(gradeText)}, ${escapeXml(uptimeText)}">
+  <rect width="${width}" height="42" rx="6" fill="#12181f"/>
+  <rect x="1" y="1" width="${width - 2}" height="40" rx="5" fill="none" stroke="#2a323c" stroke-width="1"/>
+  <text x="12" y="17" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#8b96a3">${escapeXml(label)}</text>
+  <text x="12" y="33" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="bold" fill="${color}">Grade ${escapeXml(gradeText)}</text>
+  <text x="${width - 12}" y="33" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#8b96a3" text-anchor="end">${escapeXml(uptimeText)}</text>
+</svg>`;
+}
+
+const GRADE_COLOR = { A: "#3ddc84", B: "#8bd450", C: "#e6c74b", D: "#e08a3c", F: "#e5484d" };
+
+router.get("/monitors/:token/badge.svg", async (req, res) => {
+  const monitor = await findByToken(req.params.token);
+  res.set("Content-Type", "image/svg+xml");
+  res.set("Cache-Control", "public, max-age=300"); // matches the scanner's own 300s-ish cadence closely enough that a stale badge isn't a real concern
+  if (!monitor) return res.status(404).send(badgeSvg({ label: "Pulse", grade: "?", uptimePct: null, color: "#8b96a3" }));
+
+  const [{ rows: scanRows }, { rows: uptimeRows }] = await Promise.all([
+    pool.query(`SELECT grade FROM security_scans WHERE monitor_id = $1 ORDER BY scanned_at DESC LIMIT 1`, [monitor.id]),
+    pool.query(
+      `SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'up') / NULLIF(COUNT(*), 0), 1) AS pct
+       FROM checks WHERE monitor_id = $1 AND checked_at >= now() - interval '30 days'`,
+      [monitor.id]
+    ),
+  ]);
+  const grade = scanRows[0]?.grade || null;
+  res.send(
+    badgeSvg({
+      label: monitor.name,
+      grade,
+      uptimePct: uptimeRows[0]?.pct ?? null,
+      color: GRADE_COLOR[grade?.[0]] || "#8b96a3",
+    })
+  );
 });
 
 export default router;

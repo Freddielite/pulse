@@ -1,0 +1,221 @@
+import { Router } from "express";
+import { pool } from "../db.js";
+import { requireAuth } from "../middleware/requireAuth.js";
+import { getUserOrgRole, requireOrgRole, logOrgAction } from "../lib/orgAccess.js";
+
+const router = Router();
+router.use(requireAuth);
+
+const VALID_ROLES = ["member", "admin"]; // 'owner' is never assigned through the invite/role-change routes - see PATCH /:id/members/:memberId
+
+async function countOwners(organizationId) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*) AS n FROM organization_members WHERE organization_id = $1 AND role = 'owner'`,
+    [organizationId]
+  );
+  return Number(rows[0].n);
+}
+
+// Every org the user belongs to (an accepted membership, not a pending
+// invite), with their role and a member count so the settings list
+// doesn't need a second round-trip per org.
+router.get("/", async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT o.*, om.role,
+       (SELECT COUNT(*) FROM organization_members WHERE organization_id = o.id AND user_id IS NOT NULL) AS member_count
+     FROM organizations o
+     JOIN organization_members om ON om.organization_id = o.id
+     WHERE om.user_id = $1
+     ORDER BY o.created_at ASC`,
+    [req.userId]
+  );
+  res.json(rows);
+});
+
+router.post("/", async (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: "name is required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `INSERT INTO organizations (name, owner_user_id) VALUES ($1, $2) RETURNING *`,
+      [name.trim(), req.userId]
+    );
+    // The creator is always seeded as the first owner - an org with no
+    // members would be unreachable through every other route below,
+    // all of which gate on membership.
+    await client.query(
+      `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
+      [rows[0].id, req.userId]
+    );
+    await client.query("COMMIT");
+    res.status(201).json({ ...rows[0], role: "owner", member_count: 1 });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error(err);
+    res.status(500).json({ error: "failed to create organization" });
+  } finally {
+    client.release();
+  }
+});
+
+// Full detail: the org row, its members (with email, for display),
+// pending invites, and a recent slice of the audit log. Any accepted
+// member can view this - it's the "who's on this team and what
+// happened" screen, not a management-only one.
+router.get("/:id", async (req, res) => {
+  const role = await getUserOrgRole(req.userId, req.params.id);
+  if (!role) return res.status(404).json({ error: "organization not found" });
+
+  const { rows: orgRows } = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [req.params.id]);
+  if (orgRows.length === 0) return res.status(404).json({ error: "organization not found" });
+
+  const { rows: members } = await pool.query(
+    `SELECT om.id, om.role, om.created_at, u.id AS user_id, u.email
+     FROM organization_members om JOIN users u ON u.id = om.user_id
+     WHERE om.organization_id = $1 ORDER BY om.created_at ASC`,
+    [req.params.id]
+  );
+  const { rows: pendingInvites } = await pool.query(
+    `SELECT id, invited_email, role, created_at FROM organization_members
+     WHERE organization_id = $1 AND user_id IS NULL ORDER BY created_at ASC`,
+    [req.params.id]
+  );
+  const { rows: auditLog } = await pool.query(
+    `SELECT a.id, a.action, a.detail, a.created_at, u.email AS actor_email
+     FROM org_audit_log a LEFT JOIN users u ON u.id = a.actor_user_id
+     WHERE a.organization_id = $1 ORDER BY a.created_at DESC LIMIT 50`,
+    [req.params.id]
+  );
+
+  res.json({ ...orgRows[0], role, members, pending_invites: pendingInvites, audit_log: auditLog });
+});
+
+router.patch("/:id", async (req, res) => {
+  const allowed = await requireOrgRole(req.userId, req.params.id, "admin");
+  if (!allowed) return res.status(403).json({ error: "admin access required" });
+  const { name, brand_name, brand_logo_url, brand_accent_color, custom_domain } = req.body;
+  const { rows } = await pool.query(
+    `UPDATE organizations SET
+       name = COALESCE($2, name),
+       -- Branding fields use the same "explicit clear is valid" CASE
+       -- pattern as users.webhook_url in routes/auth.js: unsetting a
+       -- logo or custom domain is a real request, not an absent field.
+       brand_name = CASE WHEN $3 THEN $4 ELSE brand_name END,
+       brand_logo_url = CASE WHEN $5 THEN $6 ELSE brand_logo_url END,
+       brand_accent_color = CASE WHEN $7 THEN $8 ELSE brand_accent_color END,
+       custom_domain = CASE WHEN $9 THEN $10 ELSE custom_domain END
+     WHERE id = $1 RETURNING *`,
+    [
+      req.params.id,
+      name?.trim() || null,
+      brand_name !== undefined, brand_name?.trim() || null,
+      brand_logo_url !== undefined, brand_logo_url?.trim() || null,
+      brand_accent_color !== undefined, brand_accent_color?.trim() || null,
+      custom_domain !== undefined, custom_domain?.trim() || null,
+    ]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "organization not found" });
+  await logOrgAction(req.params.id, req.userId, "org_updated", "updated organization settings");
+  res.json(rows[0]);
+});
+
+// Owner only - deleting the org, not just leaving it. Monitors and
+// status pages it owned aren't destroyed: the ON DELETE SET NULL on
+// their organization_id column (see db.js) turns them back into
+// ordinary personal items belonging to whoever created each one, rather
+// than disappearing.
+router.delete("/:id", async (req, res) => {
+  const { rows } = await pool.query(
+    `DELETE FROM organizations WHERE id = $1 AND owner_user_id = $2 RETURNING id`,
+    [req.params.id, req.userId]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "organization not found, or you're not its owner" });
+  res.json({ ok: true });
+});
+
+// Invites by email. If that email already belongs to an account, the
+// membership is created immediately; otherwise it's held as a pending
+// row (see claimPendingInvites) until someone signs up with that email.
+// Either way this never reveals whether the address has an account -
+// same response shape for both.
+router.post("/:id/invite", async (req, res) => {
+  const allowed = await requireOrgRole(req.userId, req.params.id, "admin");
+  if (!allowed) return res.status(403).json({ error: "admin access required" });
+  const email = req.body.email?.trim().toLowerCase();
+  const role = VALID_ROLES.includes(req.body.role) ? req.body.role : "member";
+  if (!email) return res.status(400).json({ error: "email is required" });
+
+  try {
+    const { rows: existingUser } = await pool.query(`SELECT id FROM users WHERE email = $1`, [email]);
+    if (existingUser.length > 0) {
+      await pool.query(
+        `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)`,
+        [req.params.id, existingUser[0].id, role]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO organization_members (organization_id, invited_email, role) VALUES ($1, $2, $3)`,
+        [req.params.id, email, role]
+      );
+    }
+    await logOrgAction(req.params.id, req.userId, "member_invited", `invited ${email} as ${role}`);
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "already a member or already invited" });
+    console.error(err);
+    res.status(500).json({ error: "failed to send invite" });
+  }
+});
+
+// Role changes are owner-only, and can't strand an org without one -
+// the same guard DELETE below uses.
+router.patch("/:id/members/:memberId", async (req, res) => {
+  const allowed = await requireOrgRole(req.userId, req.params.id, "owner");
+  if (!allowed) return res.status(403).json({ error: "only an owner can change roles" });
+  const role = req.body.role;
+  if (!["member", "admin", "owner"].includes(role)) return res.status(400).json({ error: "invalid role" });
+
+  const { rows: target } = await pool.query(
+    `SELECT * FROM organization_members WHERE id = $1 AND organization_id = $2`,
+    [req.params.memberId, req.params.id]
+  );
+  if (target.length === 0) return res.status(404).json({ error: "member not found" });
+  if (target[0].role === "owner" && role !== "owner" && (await countOwners(req.params.id)) <= 1) {
+    return res.status(400).json({ error: "an organization needs at least one owner - promote someone else first" });
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE organization_members SET role = $2 WHERE id = $1 RETURNING *`,
+    [req.params.memberId, role]
+  );
+  await logOrgAction(req.params.id, req.userId, "role_changed", `changed a member's role to ${role}`);
+  res.json(rows[0]);
+});
+
+// Removes a member (admin+ acting on someone else) or lets a member
+// remove themselves regardless of role - either way, blocked if it
+// would leave the org with zero owners.
+router.delete("/:id/members/:memberId", async (req, res) => {
+  const { rows: target } = await pool.query(
+    `SELECT * FROM organization_members WHERE id = $1 AND organization_id = $2`,
+    [req.params.memberId, req.params.id]
+  );
+  if (target.length === 0) return res.status(404).json({ error: "member not found" });
+
+  const isSelf = target[0].user_id === req.userId;
+  if (!isSelf) {
+    const allowed = await requireOrgRole(req.userId, req.params.id, "admin");
+    if (!allowed) return res.status(403).json({ error: "admin access required" });
+  }
+  if (target[0].role === "owner" && (await countOwners(req.params.id)) <= 1) {
+    return res.status(400).json({ error: "an organization needs at least one owner - promote someone else first" });
+  }
+
+  await pool.query(`DELETE FROM organization_members WHERE id = $1`, [req.params.memberId]);
+  await logOrgAction(req.params.id, req.userId, isSelf ? "member_left" : "member_removed", target[0].invited_email || undefined);
+  res.json({ ok: true });
+});
+
+export default router;
