@@ -59,6 +59,7 @@ curls the same URL works identically.
 | `TELEGRAM_CHAT_ID` | Optional, for Telegram | Hardcodes a single destination chat for the whole deployment. Simplest setup for a single-user instance - set this and skip per-user chat IDs entirely. If unset, falls back to each user's own `telegram_chat_id` (see below), for deployments with more than one account. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | For blacklist checks | Free from the Google Cloud Console (enable the Safe Browsing API). Without it, `blacklist_status` stays `NULL` on every monitor rather than reading as a false "clean" - see lib/blacklistCheck.js. |
 | `HIBP_API_KEY` | For breach monitoring | Paid subscription key from [haveibeenpwned.com/API/Key](https://haveibeenpwned.com/API/Key) - HIBP gated this endpoint in 2019, there's no free tier. Without it, breach monitoring silently never runs even if a user turns the toggle on - see lib/breachCheck.js. |
+| `FRONTEND_URL` | Optional, for org invite emails | Where the invite email tells someone to go log in or sign up. Without it, the email just says "log into Pulse" / "sign up for Pulse" with no link - still useful, just not clickable. |
 
 The original DNS/TLS/CT posture features still need nothing beyond what
 was already required - DNS uses the system resolver, TLS is a plain
@@ -148,6 +149,37 @@ default, not a broken one.
   routing/TLS on this app's end.
 
 ## Recent changes
+
+- **Org invites now actually send an email, and logos can be uploaded
+  instead of just linked.** Two gaps found in real use of Tier 2.
+
+  The invite endpoint (`POST /api/organizations/:id/invite`) wrote the
+  membership/pending-invite row and stopped there - nothing ever told
+  the invitee. It now sends an email via the existing `sendAlertEmail`
+  (silently a no-op without SMTP configured, same as every other email
+  in this app) telling them who invited them, to which org, and what to
+  do next - log in if they already have an account, or sign up with
+  that exact address if they don't. An optional `FRONTEND_URL` env var
+  makes that instruction a clickable link; without it the email still
+  says what to do, just without a URL to hand out. A pending invite
+  created before this change won't retroactively get an email - cancel
+  and re-send it from the org's Manage panel if the person needs it.
+
+  Logo upload: there's no file-storage backend in this app (no
+  S3/Cloudinary, and Render's own disk isn't persistent across deploys
+  anyway), so rather than build one, `OrganizationsPanel.jsx` downscales
+  the chosen image to 200px on the long side and re-encodes it
+  client-side into a `data:` URL, stored in the same
+  `organizations.brand_logo_url` column a pasted hosted URL would have
+  gone into - nothing downstream had to change, since an `<img src>`
+  doesn't care whether the scheme is `https:` or `data:`. This did
+  surface a real ceiling: the API's global body limit is a deliberate
+  64kb (see the comment above `express.json` in `index.js`), sized for
+  the largest *previously* legitimate payload - a monitor with a
+  handful of synthetic steps. A base64-encoded logo comfortably exceeds
+  that, so `/api/organizations` now gets its own `express.json({ limit:
+  "1mb" })` registered ahead of the global one, rather than raising the
+  ceiling for every other endpoint.
 
 - **Tier 2 of the security-suite roadmap: teams, white-label branding,
   trend dashboard, trust badge.** All four items from the "turns this

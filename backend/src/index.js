@@ -36,6 +36,13 @@ app.use(securityHeaders());
 // largest legitimate payload is a monitor with a handful of synthetic
 // steps, and an unbounded parse is free memory pressure on a free-tier
 // box.
+// Org branding (PATCH /api/organizations/:id) can carry a base64-encoded
+// logo image - comfortably past that 64kb ceiling, which is sized for
+// every other endpoint's actual payloads. Registered first so it wins
+// for matching paths; body-parser marks the body as already parsed once
+// this runs, so the stricter global limit below just passes it through
+// rather than re-parsing (and re-rejecting) it.
+app.use("/api/organizations", express.json({ limit: "1mb" }));
 app.use(express.json({ limit: "64kb" }));
 
 const PgSession = connectPgSimple(session);

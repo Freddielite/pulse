@@ -14,6 +14,49 @@ import Dropdown from "./Dropdown.jsx";
 
 const ROLE_LABEL = { owner: "Owner", admin: "Admin", member: "Member" };
 
+// There's no file-storage backend for this app (no S3/Cloudinary, and
+// Render's own disk isn't persistent across deploys anyway) - so rather
+// than build one just for org logos, the image is downscaled and
+// re-encoded client-side into a small data: URL, which is stored
+// directly in the same organizations.brand_logo_url TEXT column a
+// pasted hosted URL would have gone into. Nothing downstream (the
+// public status page, the share view) needed to change to support this
+// - an <img src> doesn't care whether the URL scheme is https: or
+// data:. Capped at 200px on the long side, which keeps a typical logo's
+// encoded size in the tens of KB - small enough that it isn't a
+// meaningful hit to the public pages that load it on every view.
+const MAX_LOGO_DIMENSION = 200;
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024; // guards against hanging the canvas on something absurd, not a real quality bar
+
+function resizeImageToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      reject(new Error("That image is too large - try one under 8MB."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That doesn't look like a valid image."));
+      img.onload = () => {
+        const scale = Math.min(1, MAX_LOGO_DIMENSION / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // PNG rather than JPEG - logos are usually flat graphics (often
+        // with transparency), where PNG stays small and JPEG's
+        // artifacting actually looks worse than on a photo.
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 // One org's expanded management view - members, pending invites,
 // branding, and a recent audit log slice. Fetched lazily (only once
 // this org is expanded) since the list view alone doesn't need any of
@@ -29,6 +72,7 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
   const [brandAccentColor, setBrandAccentColor] = useState("");
   const [customDomain, setCustomDomain] = useState("");
   const [savingBrand, setSavingBrand] = useState(false);
+  const [logoBusy, setLogoBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
 
@@ -87,6 +131,21 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
       await load();
     } catch (err) {
       toast(err.message, "error");
+    }
+  }
+
+  async function handleLogoFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allows re-selecting the same file later (e.g. after cropping it) without a no-op change event
+    if (!file) return;
+    setLogoBusy(true);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file);
+      setBrandLogoUrl(dataUrl);
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setLogoBusy(false);
     }
   }
 
@@ -206,8 +265,28 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
               <input value={brandAccentColor} onChange={(e) => setBrandAccentColor(e.target.value)} placeholder="#3ddc84" />
             </div>
             <div className="pl-field" style={{ marginBottom: 0 }}>
-              <label>Logo URL</label>
-              <input value={brandLogoUrl} onChange={(e) => setBrandLogoUrl(e.target.value)} placeholder="https://..." />
+              <label>Logo</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {brandLogoUrl && (
+                  <img
+                    src={brandLogoUrl}
+                    alt=""
+                    width={32}
+                    height={32}
+                    style={{ borderRadius: 6, objectFit: "cover", flexShrink: 0, background: "#fff" }}
+                  />
+                )}
+                <input
+                  value={brandLogoUrl}
+                  onChange={(e) => setBrandLogoUrl(e.target.value)}
+                  placeholder="https://... or upload below"
+                  style={{ flex: 1 }}
+                />
+              </div>
+              <label className="pl-btn pl-btn--ghost pl-btn--sm" style={{ marginTop: 6, display: "inline-block", cursor: "pointer" }}>
+                {logoBusy ? "Processing..." : "Upload image"}
+                <input type="file" accept="image/*" onChange={handleLogoFile} disabled={logoBusy} style={{ display: "none" }} />
+              </label>
             </div>
             <div className="pl-field" style={{ marginBottom: 0 }}>
               <label>Custom domain</label>

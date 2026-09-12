@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { getUserOrgRole, requireOrgRole, logOrgAction } from "../lib/orgAccess.js";
+import { sendAlertEmail } from "../lib/mailer.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -148,8 +149,16 @@ router.post("/:id/invite", async (req, res) => {
   if (!email) return res.status(400).json({ error: "email is required" });
 
   try {
-    const { rows: existingUser } = await pool.query(`SELECT id FROM users WHERE email = $1`, [email]);
-    if (existingUser.length > 0) {
+    const [{ rows: existingUser }, { rows: orgRows }, { rows: inviterRows }] = await Promise.all([
+      pool.query(`SELECT id FROM users WHERE email = $1`, [email]),
+      pool.query(`SELECT name FROM organizations WHERE id = $1`, [req.params.id]),
+      pool.query(`SELECT email FROM users WHERE id = $1`, [req.userId]),
+    ]);
+    const orgName = orgRows[0]?.name || "an organization";
+    const inviterEmail = inviterRows[0]?.email || "someone";
+    const hasAccount = existingUser.length > 0;
+
+    if (hasAccount) {
       await pool.query(
         `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)`,
         [req.params.id, existingUser[0].id, role]
@@ -160,6 +169,23 @@ router.post("/:id/invite", async (req, res) => {
         [req.params.id, email, role]
       );
     }
+
+    // Membership itself never depended on this succeeding - the row
+    // above is already committed either way - so a missing SMTP config
+    // or a delivery failure doesn't block the invite, only the notice
+    // that it happened. FRONTEND_URL is optional: without it the email
+    // just tells the invitee to log into (or sign up for) Pulse rather
+    // than linking a specific URL this backend has no way to know.
+    const appUrl = process.env.FRONTEND_URL?.trim();
+    const action = hasAccount
+      ? `Log in to Pulse${appUrl ? ` at ${appUrl}` : ""} to see it under Settings > Organizations.`
+      : `Sign up at${appUrl ? ` ${appUrl}` : " Pulse"} with this same email address (${email}) to accept - the invite is waiting for that address specifically.`;
+    await sendAlertEmail({
+      to: email,
+      subject: `${inviterEmail} invited you to ${orgName} on Pulse`,
+      text: `${inviterEmail} added you to "${orgName}" as a${role === "admin" ? "n" : ""} ${role} on Pulse, an uptime and security monitoring tool. ${action}`,
+    });
+
     await logOrgAction(req.params.id, req.userId, "member_invited", `invited ${email} as ${role}`);
     res.status(201).json({ ok: true });
   } catch (err) {
