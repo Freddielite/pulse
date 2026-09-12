@@ -15,6 +15,8 @@ const KIND_LABEL = {
   auth_probe_failed: "Auth",
   auth_probe_recovered: "Auth",
   third_party_origin_added: "Supply chain",
+  blacklist_flagged: "Blacklisted",
+  blacklist_cleared: "Blacklist",
 };
 
 function relativeTime(iso) {
