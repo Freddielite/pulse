@@ -18,6 +18,7 @@ import { pool } from "../db.js";
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
 import { sendTelegramMessage, resolveChatId } from "./telegram.js";
+import { sendWebhookAlert } from "./webhook.js";
 import { wantsNotification } from "./notificationPrefs.js";
 
 // Severities at or above this actually notify. Everything else is
@@ -95,6 +96,9 @@ async function notifySecurityEvent(monitor, event) {
   });
   if (wantsNotification(user, "telegram", "security")) {
     await sendTelegramMessage({ chatId: resolveChatId(user), text: `${icon} ${title}\n${body}\n\n${monitor.url}` });
+  }
+  if (wantsNotification(user, "webhook", "security")) {
+    await sendWebhookAlert(user.webhook_url, { event: "security", severity: event.severity, title, body, monitor });
   }
 }
 

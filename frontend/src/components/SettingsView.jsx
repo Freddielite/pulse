@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
-import { updateMe, changePassword, getTelegramStatus, listApiTokens, createApiToken, deleteApiToken, logout } from "../api.js";
+import {
+  updateMe,
+  changePassword,
+  getTelegramStatus,
+  listApiTokens,
+  createApiToken,
+  deleteApiToken,
+  logout,
+  testWebhook,
+  setup2fa,
+  confirm2fa,
+  disable2fa,
+} from "../api.js";
 import { usePush } from "../hooks/usePush.js";
 
 // Shared shape between the push and Telegram checkbox lists below - keep
@@ -41,6 +53,19 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   const [telegramChatId, setTelegramChatId] = useState(user.telegram_chat_id || "");
   const [savingTelegramChatId, setSavingTelegramChatId] = useState(false);
   const [digestBusy, setDigestBusy] = useState(false);
+  const [breachBusy, setBreachBusy] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState(user.webhook_url || "");
+  const [savingWebhookUrl, setSavingWebhookUrl] = useState(false);
+  const [testingWebhook, setTestingWebhook] = useState(false);
+  // 2FA setup is a short-lived wizard, not persisted state - null means
+  // "not currently setting up" (whether 2FA is off, or already on and
+  // nothing's in progress).
+  const [totpSetup, setTotpSetup] = useState(null); // { secret, otpauth_url } | null
+  const [totpConfirmCode, setTotpConfirmCode] = useState("");
+  const [totpBackupCodes, setTotpBackupCodes] = useState(null); // shown once, right after confirming
+  const [totpBusy, setTotpBusy] = useState(false);
+  const [totpDisablePassword, setTotpDisablePassword] = useState("");
+  const [showTotpDisable, setShowTotpDisable] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
@@ -119,6 +144,95 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     } finally {
       setDigestBusy(false);
     }
+  }
+
+  async function handleBreachToggle() {
+    setBreachBusy(true);
+    try {
+      const updated = await updateMe({ breach_monitoring_enabled: !user.breach_monitoring_enabled });
+      onUserUpdated(updated);
+      toast(updated.breach_monitoring_enabled ? "Breach monitoring turned on." : "Breach monitoring turned off.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setBreachBusy(false);
+    }
+  }
+
+  async function handleSaveWebhookUrl(e) {
+    e.preventDefault();
+    setSavingWebhookUrl(true);
+    try {
+      const updated = await updateMe({ webhook_url: webhookUrl.trim() });
+      onUserUpdated(updated);
+      toast(webhookUrl.trim() ? "Webhook URL saved." : "Webhook disconnected.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setSavingWebhookUrl(false);
+    }
+  }
+
+  async function handleTestWebhook() {
+    setTestingWebhook(true);
+    try {
+      await testWebhook();
+      toast("Test webhook sent.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setTestingWebhook(false);
+    }
+  }
+
+  async function handleStart2faSetup() {
+    setTotpBusy(true);
+    try {
+      const result = await setup2fa();
+      setTotpSetup(result);
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function handleConfirm2fa(e) {
+    e.preventDefault();
+    setTotpBusy(true);
+    try {
+      const result = await confirm2fa(totpConfirmCode.trim());
+      setTotpBackupCodes(result.backup_codes);
+      setTotpSetup(null);
+      setTotpConfirmCode("");
+      onUserUpdated({ ...user, totp_enabled: true });
+      toast("Two-factor authentication turned on.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function handleDisable2fa(e) {
+    e.preventDefault();
+    setTotpBusy(true);
+    try {
+      await disable2fa(totpDisablePassword);
+      onUserUpdated({ ...user, totp_enabled: false });
+      setShowTotpDisable(false);
+      setTotpDisablePassword("");
+      toast("Two-factor authentication turned off.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function handleCancelTotpSetup() {
+    setTotpSetup(null);
+    setTotpConfirmCode("");
   }
 
   async function handleSaveTelegramChatId(e) {
@@ -252,6 +366,70 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
         </div>
       </div>
 
+      <div className="pl-section-label">Breach monitoring</div>
+      <div className="pl-panel">
+        <div className="pl-settings-row">
+          <div>
+            <div className="pl-settings-row__title">Data breach alerts</div>
+            <div className="pl-settings-row__desc">
+              Weekly check of your alert email against HaveIBeenPwned - if it turns up in a new breach, you'll hear
+              about it over whichever alert channels you already have on.
+              {user.breach_monitoring_enabled && (
+                <>
+                  {" "}
+                  {user.breach_checked_at
+                    ? `Last checked ${new Date(user.breach_checked_at).toLocaleDateString()}.`
+                    : "Not checked yet - due on the next cron tick."}
+                  {user.breach_last_result?.breaches?.length > 0 && (
+                    <> Currently known in: {user.breach_last_result.breaches.join(", ")}.</>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+          <button
+            className={`pl-toggle ${user.breach_monitoring_enabled ? "on" : ""} ${breachBusy ? "busy" : ""}`}
+            onClick={handleBreachToggle}
+            disabled={breachBusy}
+          >
+            <span className="pl-toggle__knob" />
+          </button>
+        </div>
+      </div>
+
+      <div className="pl-section-label">Webhook alerts</div>
+      <div className="pl-panel">
+        <div className="pl-settings-row__desc" style={{ marginBottom: 10 }}>
+          Send alerts as a JSON POST to Slack, Discord, PagerDuty, or any other URL that accepts one.
+        </div>
+        <form onSubmit={handleSaveWebhookUrl} style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+          <div className="pl-field" style={{ flex: 1, marginBottom: 0 }}>
+            <label>Webhook URL</label>
+            <input
+              type="url"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              placeholder="https://hooks.slack.com/services/..."
+            />
+          </div>
+          <button className="pl-btn pl-btn--sm" type="submit" disabled={savingWebhookUrl}>
+            {savingWebhookUrl ? "Saving..." : "Save"}
+          </button>
+          {user.webhook_url && (
+            <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleTestWebhook} disabled={testingWebhook}>
+              {testingWebhook ? "Sending..." : "Send test"}
+            </button>
+          )}
+        </form>
+
+        {user.webhook_url && (
+          <NotificationEventList
+            prefs={user.notification_prefs?.webhook}
+            onChange={(key, value) => handleNotificationPrefChange("webhook", key, value)}
+          />
+        )}
+      </div>
+
       {telegramStatus?.configured && (
         <>
           <div className="pl-section-label">Telegram alerts</div>
@@ -336,6 +514,80 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
             <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleDeleteToken(t.id)}>Revoke</button>
           </div>
         ))}
+      </div>
+
+      <div className="pl-section-label">Two-factor authentication</div>
+      <div className="pl-panel">
+        {totpBackupCodes ? (
+          <div>
+            <div style={{ fontSize: 12.5, marginBottom: 8 }}>
+              Save these backup codes somewhere safe - each works once, and this is the only time they're shown.
+              Use one to log in if you ever lose access to your authenticator app.
+            </div>
+            <div style={{ background: "var(--bg)", border: "1px solid var(--signal)", borderRadius: 8, padding: 12, fontFamily: "monospace", fontSize: 13, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              {totpBackupCodes.map((c) => <span key={c}>{c}</span>)}
+            </div>
+            <button className="pl-btn pl-btn--sm" style={{ marginTop: 12 }} onClick={() => setTotpBackupCodes(null)}>
+              Done, I've saved them
+            </button>
+          </div>
+        ) : totpSetup ? (
+          <form onSubmit={handleConfirm2fa} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ fontSize: 12.5 }}>
+              Scan this into your authenticator app (Google Authenticator, Authy, 1Password, etc.), or enter the
+              secret manually:
+            </div>
+            <div style={{ background: "var(--bg)", border: "1px solid var(--panel-border)", borderRadius: 8, padding: 10, fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
+              {totpSetup.secret}
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+              Or open this URI directly on a device with an authenticator app installed: <br />
+              <span style={{ wordBreak: "break-all" }}>{totpSetup.otpauth_url}</span>
+            </div>
+            <div className="pl-field" style={{ marginBottom: 0 }}>
+              <label>6-digit code from the app</label>
+              <input value={totpConfirmCode} onChange={(e) => setTotpConfirmCode(e.target.value)} inputMode="numeric" autoFocus required />
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="pl-btn pl-btn--sm" type="submit" disabled={totpBusy}>
+                {totpBusy ? "Verifying..." : "Confirm"}
+              </button>
+              <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleCancelTotpSetup}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="pl-settings-row">
+            <div>
+              <div className="pl-settings-row__title">{user.totp_enabled ? "Enabled" : "Not enabled"}</div>
+              <div className="pl-settings-row__desc">
+                Require a 6-digit code from an authenticator app in addition to your password when logging in.
+              </div>
+            </div>
+            {user.totp_enabled ? (
+              <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => setShowTotpDisable((v) => !v)}>
+                Disable
+              </button>
+            ) : (
+              <button className="pl-btn pl-btn--sm" onClick={handleStart2faSetup} disabled={totpBusy}>
+                {totpBusy ? "Starting..." : "Enable"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {showTotpDisable && (
+          <form onSubmit={handleDisable2fa} style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--panel-border)" }}>
+            <div className="pl-field" style={{ flex: 1, marginBottom: 0 }}>
+              <label>Confirm your password to disable</label>
+              <input type="password" value={totpDisablePassword} onChange={(e) => setTotpDisablePassword(e.target.value)} autoComplete="current-password" required />
+            </div>
+            <button className="pl-btn pl-btn--sm" type="submit" disabled={totpBusy}>
+              {totpBusy ? "Working..." : "Confirm disable"}
+            </button>
+          </form>
+        )}
       </div>
 
       <div className="pl-section-label">Security</div>

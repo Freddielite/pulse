@@ -57,14 +57,15 @@ curls the same URL works identically.
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | For email | Any SMTP provider. Gmail app password, Resend, Mailgun, etc. |
 | `TELEGRAM_BOT_TOKEN` | For Telegram | One bot for the whole instance, from [@BotFather](https://t.me/BotFather). |
 | `TELEGRAM_CHAT_ID` | Optional, for Telegram | Hardcodes a single destination chat for the whole deployment. Simplest setup for a single-user instance - set this and skip per-user chat IDs entirely. If unset, falls back to each user's own `telegram_chat_id` (see below), for deployments with more than one account. |
+| `GOOGLE_SAFE_BROWSING_API_KEY` | For blacklist checks | Free from the Google Cloud Console (enable the Safe Browsing API). Without it, `blacklist_status` stays `NULL` on every monitor rather than reading as a false "clean" - see lib/blacklistCheck.js. |
+| `HIBP_API_KEY` | For breach monitoring | Paid subscription key from [haveibeenpwned.com/API/Key](https://haveibeenpwned.com/API/Key) - HIBP gated this endpoint in 2019, there's no free tier. Without it, breach monitoring silently never runs even if a user turns the toggle on - see lib/breachCheck.js. |
 
-
-**No new environment variables.** Everything in the security suite runs
-off configuration already in the database (per-monitor toggles) or needs
-no credentials at all - DNS uses the system resolver, TLS is a plain
-handshake, and crt.sh is a public endpoint with no key. The rate limiter
-and security headers need nothing beyond the `NODE_ENV` that's already
-required.
+The original DNS/TLS/CT posture features still need nothing beyond what
+was already required - DNS uses the system resolver, TLS is a plain
+handshake, crt.sh is a public endpoint with no key. Only the two rows
+above are new, and both features degrade to "not checked" rather than
+erroring when their key is missing, so leaving either unset is a safe
+default, not a broken one.
 
 ### Frontend (Vercel)
 
@@ -132,6 +133,57 @@ required.
   instance, this is the first thing to check.
 
 ## Recent changes
+
+- **Tier 1 of the security-suite roadmap: webhooks, 2FA, blacklist
+  checks, breach monitoring.** All four items from the "cheap, closes
+  real gaps" tier below, now built rather than proposed.
+
+  **Generic webhooks.** `lib/webhook.js` is one plain `fetch` POST, same
+  shape as `lib/telegram.js`. `notification_prefs` gained a third
+  channel (`webhook`, defaults live in `lib/notificationPrefs.js` - no
+  migration needed for that part) alongside push and Telegram, wired
+  into every alert site that already had those two: all seven functions
+  in `checkRunner.js` and `notifySecurityEvent()` in
+  `securityEvents.js`. Configured per-user via `users.webhook_url`
+  (Settings -> Webhook alerts), with a "Send test" button
+  (`POST /api/auth/webhook-test`) since a user-typed URL has no other
+  "is this actually working" signal the way Telegram's bot-configured
+  check does.
+
+  **2FA (TOTP).** `lib/totp.js` implements RFC 6238 directly on Node's
+  `crypto` - no dependency, same reasoning as the webhook and rate-limit
+  code. Setup is a two-step flow (`POST /2fa/setup` generates a secret
+  into `totp_pending_secret`; `POST /2fa/confirm` verifies a code before
+  it becomes the live `totp_secret` and hands back one-time backup
+  codes, bcrypt-hashed at rest like a password). Login checks
+  `totp_enabled` and, if set, holds the session at
+  `pendingTotpUserId` (deliberately not `userId`, so `requireAuth` can't
+  mistake it for a real session) until `POST /2fa/verify-login` accepts
+  either a live code or a backup code. No QR image is rendered
+  (no new dependency for it) - the setup screen shows the secret and the
+  `otpauth://` URI for manual entry instead.
+
+  **Blacklist / malware reputation.** `lib/blacklistCheck.js` calls
+  Google Safe Browsing's `threatMatches:find`, folded into the existing
+  daily scan sweep in `scanAndRecord()` rather than its own schedule.
+  Result lands on `monitors.blacklist_status` /
+  `blacklist_threats` / `blacklist_checked_at`; a flip to `flagged`
+  raises a `critical` `security_events` row the same way a scan
+  regression does, deduped on the sorted threat-type list so it doesn't
+  renotify every day while still flagged. Skipped entirely (columns stay
+  `NULL`) without `GOOGLE_SAFE_BROWSING_API_KEY` set.
+
+  **Breach exposure monitoring.** `lib/breachCheck.js` checks the
+  account's own alert email against HaveIBeenPwned on the same
+  weekly-cadence-clock shape as the digest (`breach_checked_at` /
+  `breach_monitoring_enabled`, opt-in and off by default). Doesn't use
+  `security_events` - that table is keyed to a `monitor_id` and a breach
+  isn't about any one monitor - so the last-known result lives directly
+  on the user row (`breach_last_result`) and a genuinely new breach
+  notifies over whatever channels are already on (push/email/
+  Telegram/webhook). The very first check for an account establishes the
+  baseline without alerting, same as CT logs' first sweep. Needs
+  `HIBP_API_KEY`; the sweep is a no-op without one.
 
 - **Security suite: scoring, regressions, TLS/DNS/CT posture, auth
   assertions.** The largest change since the original scanner port, and
@@ -648,3 +700,58 @@ fix them) and deliberately not built for exactly that reason.
   off it.
 - **CSV export of check/uptime history** - for when a client asks for
   proof of downtime over a specific window.
+
+### Security-suite roadmap (proposed, not built)
+
+Ranked by cost vs. impact. Nothing here crosses the "passive, outside-in,
+no exploitation" line the scanner already draws deliberately - see the
+scope note above. Anything that would need Pulse to authenticate as the
+user or actively probe beyond what an anonymous visitor could do is
+called out explicitly as its own opt-in surface, not folded into the
+default suite.
+
+**Cheap, closes real gaps: shipped, see "Recent changes" above.**
+
+- ~~Generic webhooks~~ - done (`lib/webhook.js`).
+- ~~2FA (TOTP) on the Pulse account itself~~ - done (`lib/totp.js`).
+- ~~Blacklist/reputation checks~~ - done via Google Safe Browsing
+  (`lib/blacklistCheck.js`); PhishTank wasn't added, still an option if
+  Safe Browsing's coverage ever proves too narrow.
+- ~~Breach exposure monitoring~~ - done via HaveIBeenPwned
+  (`lib/breachCheck.js`), against the account's own alert email rather
+  than a per-monitor admin contact (Pulse doesn't collect the latter).
+
+**Turns this into something resellable to agencies/clients:**
+
+- **Teams/multi-tenant with roles.** Currently single-user. Reselling
+  this needs org -> members -> per-monitor permissions and an audit log
+  of who changed what.
+- **White-labeled client reports & branded status pages.** Downloadable
+  reports and status pages exist; add logo/color/domain override so this
+  can be handed to a client as the agency's own product.
+- **Trend/history dashboard.** Scan history and regression diffing exist
+  but there's no score-over-time chart - the single best "your posture is
+  improving" sales visual.
+- **Embeddable trust badge.** Public `<img>`/iframe badge showing grade +
+  uptime %, à la SSL Labs/UptimeRobot. Free marketing loop - every
+  embedding client advertises Pulse.
+
+**More effort, real differentiation:**
+
+- **Remediation guidance per finding.** Each finding has a severity;
+  add a short "how to fix" (exact header value, DNS record to add). Turns
+  a report into a checklist instead of homework.
+- **Client-side secret scanning.** Passively parse served JS bundles for
+  exposed API keys/tokens (regex against known key shapes - Stripe, AWS,
+  Firebase, etc.). Still passive - reading what's already served - so it
+  stays inside the existing scope line.
+- **CSP violation ingestion endpoint.** Let a monitored site point its
+  `report-uri`/`report-to` at Pulse and passively collect real violations
+  instead of only inferring risk from the header value.
+- **Scheduled authenticated deep-scans, opt-in per monitor.** Everything
+  today is unauthenticated/outside-in by design, which is itself a
+  selling point ("safe to point at a client's prod site without asking
+  first"). Deeper coverage - authenticated endpoint enumeration,
+  business-logic checks - would need its own explicit consent flow, kept
+  separate from the default suite so that guarantee never gets
+  compromised for existing monitors.

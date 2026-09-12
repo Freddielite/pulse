@@ -6,10 +6,12 @@ import { getTlsPosture, getDomainExpiry, hostnameFromUrl } from "./certCheck.js"
 import { sendPushToUser } from "./webPush.js";
 import { sendAlertEmail } from "./mailer.js";
 import { sendTelegramMessage, resolveChatId } from "./telegram.js";
+import { sendWebhookAlert } from "./webhook.js";
 import { scanSite } from "./scanner.js";
 import { runAuthProbe } from "./authProbe.js";
 import { snapshotDns, diffSnapshots, checkDanglingCname, registrableRoot } from "./dnsCheck.js";
 import { fetchCtCertificates, recentlyIssued, normalizeIssuer } from "./ctLogs.js";
+import { checkBlacklist, blacklistCheckConfigured } from "./blacklistCheck.js";
 import { recordSecurityEvent, diffScans } from "./securityEvents.js";
 import { wantsNotification } from "./notificationPrefs.js";
 
@@ -482,6 +484,38 @@ export async function scanAndRecord(monitor) {
     });
   }
 
+  // --- Blacklist / malware reputation ---
+  //
+  // Skipped entirely when no API key is configured (see
+  // blacklistCheckConfigured), so a deployment without one just never
+  // touches these columns rather than writing a false "clean".
+  if (blacklistCheckConfigured()) {
+    const previousStatus = monitor.blacklist_status;
+    const blacklistResult = await checkBlacklist(monitor.url);
+    await pool.query(
+      `UPDATE monitors SET blacklist_status = $2, blacklist_threats = $3, blacklist_checked_at = now() WHERE id = $1`,
+      [monitor.id, blacklistResult.status, JSON.stringify(blacklistResult.threats)]
+    );
+    if (blacklistResult.status === "flagged") {
+      await recordSecurityEvent(monitor, {
+        kind: "blacklist_flagged",
+        severity: "critical",
+        title: `flagged by Google Safe Browsing: ${blacklistResult.threats.join(", ")}`,
+        detail: "This URL currently appears on Google's Safe Browsing list. Browsers may show visitors a warning page before they can reach the site. Worth treating as urgent - a flag like this can come from a compromise you don't know about yet, not just from content you intended to publish.",
+        data: { threats: blacklistResult.threats },
+        dedupeKey: blacklistResult.threats.slice().sort().join(","),
+      });
+    } else if (previousStatus === "flagged" && blacklistResult.status === "clean") {
+      await recordSecurityEvent(monitor, {
+        kind: "blacklist_cleared",
+        severity: "info",
+        title: "no longer flagged by Google Safe Browsing",
+        detail: "The previous flag has cleared.",
+        notify: false,
+      });
+    }
+  }
+
   // --- New third-party origins ---
   //
   // A script origin appearing on a page that didn't have it before is
@@ -680,6 +714,7 @@ async function alertDown(monitor, result, incidentId) {
   if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
   if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "down", severity: "high", title, body, monitor });
 }
 
 async function alertStillDown(monitor, result, incident) {
@@ -693,6 +728,7 @@ async function alertStillDown(monitor, result, incident) {
   if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse alert: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
   if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🔴 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "still_down", severity: "high", title, body, monitor });
 }
 
 async function alertRecovered(monitor, incident) {
@@ -706,6 +742,7 @@ async function alertRecovered(monitor, incident) {
   if (wantsNotification(user, "push", "down")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
   if (wantsNotification(user, "telegram", "down")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}\n${body}` });
+  if (wantsNotification(user, "webhook", "down")) await sendWebhookAlert(user.webhook_url, { event: "recovered", severity: "info", title, body, monitor });
 }
 
 async function alertContentChanged(monitor) {
@@ -717,6 +754,7 @@ async function alertContentChanged(monitor) {
   if (wantsNotification(user, "push", "contentChanged")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
   if (wantsNotification(user, "telegram", "contentChanged")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `📝 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "webhook", "contentChanged")) await sendWebhookAlert(user.webhook_url, { event: "content_changed", severity: "medium", title, body, monitor });
 }
 
 // Lighter than alertDown: no incident row, no repeat "still degraded"
@@ -732,6 +770,7 @@ async function alertDegraded(monitor, result) {
   if (wantsNotification(user, "push", "degraded")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: `${body}\n\nURL: ${monitor.url}` });
   if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟡 ${title}\n${body}\n\n${monitor.url}` });
+  if (wantsNotification(user, "webhook", "degraded")) await sendWebhookAlert(user.webhook_url, { event: "degraded", severity: "medium", title, body, monitor });
 }
 
 async function alertNoLongerDegraded(monitor) {
@@ -739,9 +778,11 @@ async function alertNoLongerDegraded(monitor) {
   const user = userRows[0];
   if (!user) return;
   const title = `${monitor.name} is back to normal speed`;
-  if (wantsNotification(user, "push", "degraded")) await sendPushToUser(monitor.user_id, { title, body: "Response time is back under the slow threshold.", url: `/monitors/${monitor.id}` });
-  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: "Response time is back under the slow threshold." });
+  const body = "Response time is back under the slow threshold.";
+  if (wantsNotification(user, "push", "degraded")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
+  await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
   if (wantsNotification(user, "telegram", "degraded")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `🟢 ${title}` });
+  if (wantsNotification(user, "webhook", "degraded")) await sendWebhookAlert(user.webhook_url, { event: "degraded_recovered", severity: "info", title, body, monitor });
 }
 
 // Throttled to one nudge per calendar day per monitor+kind, so a 14-day
@@ -765,4 +806,5 @@ async function alertExpiringSoon(monitor, kind, expiresAt) {
   if (wantsNotification(user, "push", "expiring")) await sendPushToUser(monitor.user_id, { title, body, url: `/monitors/${monitor.id}` });
   await sendAlertEmail({ to: user.alert_email, subject: `Pulse: ${title}`, text: body });
   if (wantsNotification(user, "telegram", "expiring")) await sendTelegramMessage({ chatId: resolveChatId(user), text: `⚠️ ${title}\n${body}` });
+  if (wantsNotification(user, "webhook", "expiring")) await sendWebhookAlert(user.webhook_url, { event: "expiring", severity: "medium", title, body, monitor });
 }

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pool } from "../db.js";
 import { runUptimeChecks, runCertSweep, runSecuritySweep, runDnsSweep, runCtSweep } from "../lib/checkRunner.js";
 import { runDigestSweep } from "../lib/digest.js";
+import { runBreachSweep } from "../lib/breachCheck.js";
 
 const router = Router();
 
@@ -81,8 +82,12 @@ router.all("/tick", requireCronSecret, async (req, res) => {
     // so it costs nothing to check on every tick rather than needing its
     // own separate schedule.
     const digestsSent = await runDigestSweep();
+    // Same unscoped, weekly-cadence, no-op-most-ticks shape as the
+    // digest sweep right above it - see runBreachSweep for why it's
+    // safe to call on every tick regardless.
+    const breachesChecked = await runBreachSweep();
 
-    res.json({ ...uptimeResults, certChecks, securityScans, dnsChecks, ctChecks, digestsSent });
+    res.json({ ...uptimeResults, certChecks, securityScans, dnsChecks, ctChecks, digestsSent, breachesChecked });
   } finally {
     await client.query("SELECT pg_advisory_unlock($1)", [TICK_LOCK_KEY]).catch(() => {});
     client.release();

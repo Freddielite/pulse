@@ -444,5 +444,56 @@ export async function migrate() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_auth_attempts_bucket_time ON auth_attempts(bucket, attempted_at DESC);
+
+    -- ===================================================================
+    -- Tier 1 additions: webhooks, 2FA, blacklist, breach monitoring
+    -- ===================================================================
+
+    -- Generic webhook alerts (Slack/Discord/PagerDuty/custom URL), same
+    -- on/off-per-event-kind shape as push/Telegram - see
+    -- notification_prefs above and lib/notificationPrefs.js, which now
+    -- also owns a "webhook" channel (its defaults live in code, not a
+    -- column default, so no migration was needed to add the channel
+    -- itself). NULL means no webhook configured, same as a NULL
+    -- telegram_chat_id means Telegram is off.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS webhook_url TEXT;
+
+    -- TOTP two-factor auth. totp_secret is the active, verified secret;
+    -- totp_pending_secret holds a freshly generated one between "start
+    -- setup" and "confirm with a code from your app" so a user who
+    -- abandons setup halfway never ends up with 2FA silently required
+    -- with no way to produce a valid code. totp_backup_codes are
+    -- bcrypt-hashed one-time recovery codes, same treatment as
+    -- password_hash - shown once at generation and unrecoverable after.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_secret TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_backup_codes JSONB;
+
+    -- Breach exposure monitoring (HaveIBeenPwned), opt-in and off by
+    -- default like every other alert-adjacent feature here - it queries
+    -- a third party with the user's own email address, so defaulting it
+    -- on would be the wrong call even though the check itself is
+    -- passive. Same weekly-cadence-clock shape as digest_sent_at: NULL
+    -- means never checked, so it's immediately due once turned on.
+    -- breach_last_result is { breaches: [name, ...] } from the most
+    -- recent check - kept so the sweep can tell "a new breach appeared"
+    -- apart from "still the same ones as last week".
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS breach_monitoring_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS breach_checked_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS breach_last_result JSONB;
+
+    -- Blacklist/malware reputation (Google Safe Browsing). Runs on the
+    -- same sweep as the header/exposed-path scan (see
+    -- security_scanned_at) rather than its own schedule - one more cheap
+    -- request tacked onto a sweep that already happens daily per
+    -- monitor. NULL means never checked (key not configured, or not
+    -- reached yet); 'unknown' means checked but the API call itself
+    -- failed - both are distinct from 'clean', same reasoning as
+    -- auth_probe_status treating "never run" and "ran but inconclusive"
+    -- as different states.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS blacklist_status TEXT;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS blacklist_threats JSONB;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS blacklist_checked_at TIMESTAMPTZ;
   `);
 }
