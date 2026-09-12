@@ -24,7 +24,21 @@ router.post("/signup", authRateLimit({ max: 5, windowMinutes: 60 }), async (req,
   if (!email || !password || password.length < 8) {
     return res.status(400).json({ error: "email and an 8+ character password are required" });
   }
-  if (process.env.SIGNUP_CODE && signup_code !== process.env.SIGNUP_CODE) {
+  const normalizedEmail = email.trim().toLowerCase();
+  // A pending org invite for this exact email is its own proof of
+  // authorization to sign up - someone with admin+ access on an org
+  // already vouched for this address specifically, which is a stronger
+  // signal than the shared SIGNUP_CODE was ever standing in for. Without
+  // this, an invited person has no way to know the site-wide code at
+  // all (it's never included in the invite itself, deliberately - see
+  // the "why's there no action link" thread), so they'd be stuck at
+  // "invalid signup code" despite having a legitimate invite waiting.
+  const { rows: pendingInvite } = await pool.query(
+    `SELECT 1 FROM organization_members WHERE invited_email = $1 AND user_id IS NULL LIMIT 1`,
+    [normalizedEmail]
+  );
+  const hasInvite = pendingInvite.length > 0;
+  if (process.env.SIGNUP_CODE && !hasInvite && signup_code !== process.env.SIGNUP_CODE) {
     // A wrong signup code counts as a failed attempt, otherwise the code
     // itself is brute-forceable at whatever rate the network allows.
     await req.recordAuthFailure();
@@ -35,7 +49,7 @@ router.post("/signup", authRateLimit({ max: 5, windowMinutes: 60 }), async (req,
     const { rows } = await pool.query(
       `INSERT INTO users (email, password_hash, alert_email) VALUES ($1, $2, $3)
        RETURNING id, email, alert_email`,
-      [email.trim().toLowerCase(), hash, alert_email?.trim() || email.trim().toLowerCase()]
+      [normalizedEmail, hash, alert_email?.trim() || normalizedEmail]
     );
     req.session.userId = rows[0].id;
     // Claims any invite sent to this address before the account existed

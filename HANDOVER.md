@@ -150,6 +150,22 @@ default, not a broken one.
 
 ## Recent changes
 
+- **A pending org invite now bypasses `SIGNUP_CODE`.** These were two
+  unrelated gates that had never been introduced to each other:
+  `SIGNUP_CODE` exists to stop random strangers signing up for a
+  publicly-deployed instance, and has nothing to do with org invites -
+  it never got included in the invite email (deliberately, since
+  broadcasting the site-wide code by email would defeat its own point),
+  which meant an invited person had no way to know it and would just
+  hit "invalid signup code" on the account they were specifically
+  invited to create. Fixed in `POST /api/auth/signup`: a pending
+  `organization_members` row (`invited_email` matching, `user_id` still
+  NULL) is checked before the code comparison, and skips it if found -
+  someone with admin+ access on an org already vouched for that exact
+  address, which is a stronger signal than the shared code was ever
+  standing in for. Signing up with no invite and no code still behaves
+  exactly as before.
+
 - **Invite emails now render an actual button, not a bare pasted URL.**
   `sendAlertEmail()` gained optional `actionUrl`/`actionLabel` params -
   when present, it sends `htmlContent` (a simple styled button) alongside
