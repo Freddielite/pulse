@@ -30,7 +30,7 @@ function relativeTime(iso) {
   return `${days}d ago`;
 }
 
-export default function SecurityTimeline({ events, onAcknowledge }) {
+export default function SecurityTimeline({ events, onAcknowledge, canManage = true }) {
   if (!events) return null;
 
   const open = events.filter((event) => !event.acknowledged);
@@ -74,7 +74,7 @@ export default function SecurityTimeline({ events, onAcknowledge }) {
                   </div>
                   {event.detail && <div className="pl-finding-row__detail">{event.detail}</div>}
                 </div>
-                {!event.acknowledged && (
+                {!event.acknowledged && canManage && (
                   <button
                     type="button"
                     className="pl-btn pl-btn--ghost"

@@ -150,6 +150,28 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Frontend now hides the actions a member's role blocks, instead of
+  showing buttons that 403 on click.** The previous entry (member role
+  enforcement) was backend-only - correct in that it actually stopped
+  the action, but a member would still see Edit/Delete/Snooze/Regenerate/
+  etc. looking fully clickable and only find out they couldn't use them
+  after clicking. `MonitorDetail.jsx` now computes `canManage` (creator,
+  or admin+ on the monitor's org) and hides exactly the buttons the
+  backend would reject - Edit, Delete, the whole snooze panel, Rescan,
+  DNS/certificate "Check now", event Acknowledge, and Regenerate/Revoke
+  on the share link. Read-only things (viewing an existing share link
+  and its badge, downloading a report) stay visible to everyone.
+  `StatusPagesView.jsx` got the same treatment for its Edit/Delete/
+  Regenerate buttons. Both compute this by calling `listOrganizations()`
+  (or, for a single monitor, `getOrganization()`) to get the viewer's
+  own role, and default to hiding the action if that hasn't resolved
+  yet or fails - a brief flash of hidden buttons that then appear is a
+  far better failure mode than the reverse. This is purely a
+  display-layer mirror of the real server-side check from the previous
+  entry, not new enforcement of its own - hiding a button here is about
+  not showing someone an action they can't take, not what actually
+  stops them from taking it.
+
 - **Member role is now actually enforced on managing monitors and
   status pages, not just on org membership itself.** This closed the
   gap flagged in the original Tier 2 write-up: a plain member could

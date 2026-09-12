@@ -165,7 +165,7 @@ export default function App() {
         )}
 
         {tab === "dashboard" && selected && (
-          <MonitorDetail monitor={selected} existingGroups={existingGroups} onBack={closeMonitor} onChanged={loadMonitors} toast={toast} />
+          <MonitorDetail monitor={selected} currentUser={user} existingGroups={existingGroups} onBack={closeMonitor} onChanged={loadMonitors} toast={toast} />
         )}
 
         {tab === "status-pages" && (
@@ -175,6 +175,7 @@ export default function App() {
             pages={statusPages}
             loading={statusPagesLoading}
             onReload={loadStatusPages}
+            currentUser={user}
             toast={toast}
           />
         )}

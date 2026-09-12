@@ -147,7 +147,7 @@ function Finding({ finding }) {
   );
 }
 
-export default function SecurityScanPanel({ monitor, security, history, scanning, onRescan, onDownloadReport }) {
+export default function SecurityScanPanel({ monitor, security, history, scanning, onRescan, onDownloadReport, canManage = true }) {
   // Failures first is already the server's sort order (see sortFindings
   // in lib/severity.js), but passes are collapsed by default here: a scan
   // now runs 30-odd checks, and a wall of green is exactly the thing that
@@ -172,15 +172,19 @@ export default function SecurityScanPanel({ monitor, security, history, scanning
               Download report
             </button>
           )}
-          <button
-            type="button"
-            className="pl-btn pl-btn--ghost"
-            style={{ fontSize: 11, padding: "3px 10px" }}
-            onClick={onRescan}
-            disabled={scanning}
-          >
-            {scanning ? "Scanning…" : "Rescan now"}
-          </button>
+          {/* Downloading a report is read-only - open to any member,
+              even one who can't trigger the scan that produced it. */}
+          {canManage && (
+            <button
+              type="button"
+              className="pl-btn pl-btn--ghost"
+              style={{ fontSize: 11, padding: "3px 10px" }}
+              onClick={onRescan}
+              disabled={scanning}
+            >
+              {scanning ? "Scanning…" : "Rescan now"}
+            </button>
+          )}
         </div>
       </div>
 

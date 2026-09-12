@@ -77,7 +77,7 @@ const RECORD_ROWS = [
   { key: "mx", label: "MX (mail)" },
 ];
 
-export function DnsPanel({ dns, onRefresh, refreshing }) {
+export function DnsPanel({ dns, onRefresh, refreshing, canManage = true }) {
   const snapshot = dns?.dns_snapshot;
 
   const spf = snapshot?.txt?.find((record) => /^v=spf1/i.test(record));
@@ -92,15 +92,17 @@ export function DnsPanel({ dns, onRefresh, refreshing }) {
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 8px" }}
       >
         <span>DNS</span>
-        <button
-          type="button"
-          className="pl-btn pl-btn--ghost"
-          style={{ fontSize: 11, padding: "3px 10px" }}
-          onClick={onRefresh}
-          disabled={refreshing}
-        >
-          {refreshing ? "Checking…" : "Check now"}
-        </button>
+        {canManage && (
+          <button
+            type="button"
+            className="pl-btn pl-btn--ghost"
+            style={{ fontSize: 11, padding: "3px 10px" }}
+            onClick={onRefresh}
+            disabled={refreshing}
+          >
+            {refreshing ? "Checking…" : "Check now"}
+          </button>
+        )}
       </div>
       <div className="pl-panel">
         {!snapshot ? (
@@ -148,7 +150,7 @@ export function DnsPanel({ dns, onRefresh, refreshing }) {
 // Certificate Transparency
 // ---------------------------------------------------------------------
 
-export function CertificatesPanel({ data, onRefresh, refreshing, onMonitorSubdomain }) {
+export function CertificatesPanel({ data, onRefresh, refreshing, onMonitorSubdomain, canManage = true }) {
   const [showAll, setShowAll] = useState(false);
   const certificates = data?.certificates || [];
   const subdomains = data?.subdomains || [];
@@ -162,15 +164,17 @@ export function CertificatesPanel({ data, onRefresh, refreshing, onMonitorSubdom
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 8px" }}
       >
         <span>Certificate transparency</span>
-        <button
-          type="button"
-          className="pl-btn pl-btn--ghost"
-          style={{ fontSize: 11, padding: "3px 10px" }}
-          onClick={onRefresh}
-          disabled={refreshing}
-        >
-          {refreshing ? "Checking crt.sh…" : "Check now"}
-        </button>
+        {canManage && (
+          <button
+            type="button"
+            className="pl-btn pl-btn--ghost"
+            style={{ fontSize: 11, padding: "3px 10px" }}
+            onClick={onRefresh}
+            disabled={refreshing}
+          >
+            {refreshing ? "Checking crt.sh…" : "Check now"}
+          </button>
+        )}
       </div>
       <div className="pl-panel">
         {certificates.length === 0 ? (

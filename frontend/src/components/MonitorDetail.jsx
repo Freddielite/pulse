@@ -34,7 +34,7 @@ function formatDateTime(iso) {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-export default function MonitorDetail({ monitor, existingGroups = [], onBack, onChanged, toast }) {
+export default function MonitorDetail({ monitor, currentUser, existingGroups = [], onBack, onChanged, toast }) {
   const [checks, setChecks] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [uptime, setUptime] = useState(null);
@@ -52,11 +52,13 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
-  // Fetched only when this monitor belongs to an org, purely to put the
-  // org's brand name on the downloadable report header/footer instead
-  // of "Pulse" - see handleDownloadReport. A fetch failure here just
-  // means the report falls back to the generic branding, not an error
-  // worth surfacing.
+  // Fetched whenever this monitor belongs to an org - originally just
+  // for the report branding below, now also the source of the current
+  // viewer's role there (see canManage just below), since GET
+  // /organizations/:id already returns the caller's own role in the
+  // same response. A fetch failure now means canManage fails closed
+  // (buttons hidden) rather than the report silently losing its
+  // branding - the safer direction to be wrong in.
   const [orgBrand, setOrgBrand] = useState(null);
 
   useEffect(() => {
@@ -74,6 +76,19 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
       ignore = true;
     };
   }, [monitor.organization_id]);
+
+  // Mirrors the backend's loadMonitorForMutation exactly: the monitor's
+  // own creator can always manage it, and otherwise only admin+ on the
+  // org that owns it. Defaults to false (not true) while orgBrand is
+  // still loading for an org-owned monitor that isn't this viewer's
+  // own - a brief flash of hidden buttons that then appear is far
+  // better than the reverse (buttons that appear clickable, then
+  // vanish, or worse, silently fail with a 403 after the click). This
+  // is purely a display-layer mirror of a real server-side check, not
+  // the enforcement itself - hiding a button here is about not showing
+  // someone an action they can't take, not what actually stops them.
+  const isOwnMonitor = currentUser && monitor.user_id === currentUser.id;
+  const canManage = isOwnMonitor || (monitor.organization_id ? orgBrand?.role === "admin" || orgBrand?.role === "owner" : true);
 
   // #/share/<token> - resolves through main.jsx's hash router, which
   // renders SharedMonitorView with no session at all.
@@ -412,11 +427,16 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
           <div className="pl-detail-url">{monitor.url}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-          <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => setEditing(true)}>Edit</button>
-          <button className="pl-btn pl-btn--danger pl-btn--sm" onClick={() => setConfirmingDelete(true)}>Delete</button>
+          {canManage && (
+            <>
+              <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => setEditing(true)}>Edit</button>
+              <button className="pl-btn pl-btn--danger pl-btn--sm" onClick={() => setConfirmingDelete(true)}>Delete</button>
+            </>
+          )}
         </div>
       </div>
 
+      {canManage && (
       <div className="pl-panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
         {snoozed ? (
           <>
@@ -438,6 +458,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
           </>
         )}
       </div>
+      )}
 
       {uptime ? (
         <div className="pl-uptime-grid">
@@ -533,15 +554,16 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
           scanning={scanning}
           onRescan={handleRunScan}
           onDownloadReport={handleDownloadReport}
+          canManage={canManage}
         />
       )}
 
       {monitor.monitor_type !== "tcp" && <SecurityTrendChart history={securityHistory} />}
 
-      <SecurityTimeline events={securityEvents} onAcknowledge={handleAcknowledgeEvent} />
+      <SecurityTimeline events={securityEvents} onAcknowledge={handleAcknowledgeEvent} canManage={canManage} />
 
       {monitor.monitor_type !== "tcp" && (
-        <DnsPanel dns={dns} onRefresh={handleRefreshDns} refreshing={dnsRefreshing} />
+        <DnsPanel dns={dns} onRefresh={handleRefreshDns} refreshing={dnsRefreshing} canManage={canManage} />
       )}
 
       {monitor.monitor_type !== "tcp" && monitor.ct_enabled !== false && (
@@ -549,6 +571,7 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
           data={certificates}
           onRefresh={handleRefreshCertificates}
           refreshing={ctRefreshing}
+          canManage={canManage}
           onMonitorSubdomain={handleMonitorSubdomain}
         />
       )}
@@ -564,10 +587,12 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
               <code style={{ fontSize: 12.5, wordBreak: "break-all", flex: 1 }}>{shareUrl}</code>
               <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleCopyShareLink}>Copy</button>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleRegenerateShare} disabled={shareBusy}>Regenerate</button>
-              <button type="button" className="pl-btn pl-btn--danger pl-btn--sm" onClick={handleRevokeShare} disabled={shareBusy}>Revoke</button>
-            </div>
+            {canManage && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleRegenerateShare} disabled={shareBusy}>Regenerate</button>
+                <button type="button" className="pl-btn pl-btn--danger pl-btn--sm" onClick={handleRevokeShare} disabled={shareBusy}>Revoke</button>
+              </div>
+            )}
 
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--panel-border)" }}>
               <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Embeddable badge</div>
@@ -583,9 +608,11 @@ export default function MonitorDetail({ monitor, existingGroups = [], onBack, on
             </div>
           </>
         ) : (
-          <button type="button" className="pl-btn pl-btn--sm" onClick={handleEnableShare} disabled={shareBusy}>
-            {shareBusy ? "Creating…" : "Create share link"}
-          </button>
+          canManage && (
+            <button type="button" className="pl-btn pl-btn--sm" onClick={handleEnableShare} disabled={shareBusy}>
+              {shareBusy ? "Creating…" : "Create share link"}
+            </button>
+          )
         )}
       </div>
 

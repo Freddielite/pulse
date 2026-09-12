@@ -144,11 +144,35 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
   );
 }
 
-export default function StatusPagesView({ monitors, existingGroups = [], pages, loading, onReload, toast }) {
+export default function StatusPagesView({ monitors, existingGroups = [], pages, loading, onReload, currentUser, toast }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingPage, setEditingPage] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  // Role per org the current user belongs to, keyed by org id - same
+  // purpose as MonitorDetail's orgBrand.role, just fetched once here
+  // for every page's org instead of per-monitor, since this view
+  // renders a whole list at once rather than one detail page.
+  const [orgRoles, setOrgRoles] = useState({});
+
+  useEffect(() => {
+    listOrganizations()
+      .then((orgs) => setOrgRoles(Object.fromEntries(orgs.map((o) => [o.id, o.role]))))
+      .catch(() => {}); // failing closed (canManage below defaults to false for an org page) is the safe direction to be wrong in
+  }, []);
+
+  // Mirrors the backend's loadStatusPageForMutation: the page's own
+  // creator can always manage it, otherwise only admin+ on the org that
+  // owns it. Personal pages (no organization_id) only ever appear in
+  // this list if the viewer is already their creator - the API's own
+  // list query guarantees that - so canManage is unconditionally true
+  // for those.
+  function canManagePage(page) {
+    if (!currentUser) return false;
+    if (page.user_id === currentUser.id) return true;
+    if (!page.organization_id) return false;
+    return orgRoles[page.organization_id] === "admin" || orgRoles[page.organization_id] === "owner";
+  }
 
   async function handleCopy(token) {
     const url = `${window.location.origin}${window.location.pathname}#/status/${token}`;
@@ -229,6 +253,7 @@ export default function StatusPagesView({ monitors, existingGroups = [], pages, 
         const target = page.group_name
           ? `Group: ${page.group_name}`
           : `${(page.monitor_ids || []).length} monitor${(page.monitor_ids || []).length === 1 ? "" : "s"}, manually selected`;
+        const canManage = canManagePage(page);
         return (
           <div className="pl-panel" key={page.id} style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
@@ -236,17 +261,21 @@ export default function StatusPagesView({ monitors, existingGroups = [], pages, 
                 <div style={{ fontWeight: 600, fontSize: 14.5 }}>{page.name}</div>
                 <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{target}</div>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => setEditingPage(page)}>Edit</button>
-                <button className="pl-btn pl-btn--danger pl-btn--sm" onClick={() => setConfirmingDeleteId(page.id)}>Delete</button>
-              </div>
+              {canManage && (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => setEditingPage(page)}>Edit</button>
+                  <button className="pl-btn pl-btn--danger pl-btn--sm" onClick={() => setConfirmingDeleteId(page.id)}>Delete</button>
+                </div>
+              )}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
               <code style={{ fontSize: 12.5, wordBreak: "break-all", flex: 1 }}>{url}</code>
               <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleCopy(page.share_token)}>Copy</button>
-              <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleRegenerate(page.id)} disabled={busyId === page.id}>
-                Regenerate
-              </button>
+              {canManage && (
+                <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleRegenerate(page.id)} disabled={busyId === page.id}>
+                  Regenerate
+                </button>
+              )}
             </div>
           </div>
         );
