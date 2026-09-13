@@ -150,6 +150,21 @@ default, not a broken one.
 
 ## Recent changes
 
+- **The dashboard's "Snooze all monitors" panel no longer shows up when
+  it would be a guaranteed no-op.** `snoozeAllMonitors`/
+  `unsnoozeAllMonitors` only ever act on monitors the clicking user
+  personally owns (`user_id` match, no `organization_id`) - a
+  deliberate choice from when orgs were added, so a bulk action never
+  silently reaches into a teammate's monitors. That means the panel was
+  showing (and, for "unsnooze all," sometimes claiming something was
+  snoozed) even for someone with zero personal monitors - not a role
+  problem specifically, since an admin or owner whose monitors are all
+  org-owned would hit the exact same dead button. `Dashboard.jsx` now
+  only renders the panel when the viewer has at least one personal
+  monitor, and `anySnoozed` is computed from personal monitors only
+  too, so "Unsnooze all" doesn't appear based on an org monitor's
+  snooze state that the button can't actually touch.
+
 - **Frontend now hides the actions a member's role blocks, instead of
   showing buttons that 403 on click.** The previous entry (member role
   enforcement) was backend-only - correct in that it actually stopped

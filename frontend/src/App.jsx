@@ -161,7 +161,7 @@ export default function App() {
 
       <div key={pageKey} className={`pl-page pl-page--${navAction}`}>
         {tab === "dashboard" && !selected && (
-          <Dashboard monitors={monitors} loading={monitorsLoading} onSelect={openMonitor} onAdd={() => setAdding(true)} onChanged={loadMonitors} toast={toast} />
+          <Dashboard monitors={monitors} loading={monitorsLoading} onSelect={openMonitor} onAdd={() => setAdding(true)} onChanged={loadMonitors} currentUser={user} toast={toast} />
         )}
 
         {tab === "dashboard" && selected && (

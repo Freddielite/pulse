@@ -17,13 +17,22 @@ const SNOOZE_OPTIONS = [
   { label: "24h", minutes: 1440 },
 ];
 
-export default function Dashboard({ monitors, loading, onSelect, onAdd, onChanged, toast }) {
+export default function Dashboard({ monitors, loading, onSelect, onAdd, onChanged, currentUser, toast }) {
   const [checking, setChecking] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const upCount = monitors.filter((m) => m.current_status === "up").length;
   const downCount = monitors.filter((m) => m.current_status === "down").length;
-  const anySnoozed = monitors.some((m) => m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now());
+  // The bulk snooze-all/unsnooze-all/check-now-style actions below only
+  // ever touch monitors this specific user personally owns - that was a
+  // deliberate scoping choice from when orgs were added (a bulk action
+  // silently reaching into a teammate's monitors felt like the wrong
+  // default), not something tied to role. So the panel itself is only
+  // worth showing when there's at least one personal monitor for it to
+  // act on - otherwise every button in it is a guaranteed no-op,
+  // regardless of whether the viewer is a member, admin, or owner.
+  const personalMonitors = monitors.filter((m) => !m.organization_id && m.user_id === currentUser?.id);
+  const anySnoozed = personalMonitors.some((m) => m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now());
 
   async function handleToggleSnooze(monitor) {
     try {
@@ -128,7 +137,7 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
         </div>
       </div>
 
-      {monitors.length > 0 && (
+      {personalMonitors.length > 0 && (
         <div className="pl-panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
           {anySnoozed ? (
             <>
