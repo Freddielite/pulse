@@ -10,7 +10,7 @@ import { claimPendingInvites } from "../lib/orgAccess.js";
 
 const router = Router();
 
-const ME_COLUMNS = `id, email, alert_email, telegram_chat_id, webhook_url, digest_enabled, digest_sent_at,
+const ME_COLUMNS = `id, email, alert_email, telegram_chat_id, webhook_url, digest_enabled, digest_sent_at, digest_day_of_week,
   notification_prefs, totp_enabled, breach_monitoring_enabled, breach_checked_at, breach_last_result`;
 
 // Optional lightweight gate so a publicly-deployed instance can't be
@@ -229,7 +229,10 @@ router.post("/webhook-test", requireAuth, async (req, res) => {
 });
 
 router.patch("/me", requireAuth, async (req, res) => {
-  const { alert_email, telegram_chat_id, webhook_url, digest_enabled, breach_monitoring_enabled, notification_prefs } = req.body;
+  const { alert_email, telegram_chat_id, webhook_url, digest_enabled, digest_day_of_week, breach_monitoring_enabled, notification_prefs } = req.body;
+  if (digest_day_of_week !== undefined && (!Number.isInteger(digest_day_of_week) || digest_day_of_week < 0 || digest_day_of_week > 6)) {
+    return res.status(400).json({ error: "digest_day_of_week must be an integer 0 (Sunday) through 6 (Saturday)" });
+  }
   // Merged against the current row (not just the default shape) so a
   // PATCH that only touches, say, push.down doesn't clobber telegram or
   // webhook prefs the user set in an earlier request.
@@ -258,7 +261,8 @@ router.patch("/me", requireAuth, async (req, res) => {
        -- as telegram_chat_id above, for the same reason - disconnecting
        -- a webhook is a real request, not an absent field.
        webhook_url = CASE WHEN $7 THEN $8 ELSE webhook_url END,
-       breach_monitoring_enabled = COALESCE($9, breach_monitoring_enabled)
+       breach_monitoring_enabled = COALESCE($9, breach_monitoring_enabled),
+       digest_day_of_week = COALESCE($10, digest_day_of_week)
      WHERE id = $1 RETURNING ${ME_COLUMNS}`,
     [
       req.userId,
@@ -270,6 +274,7 @@ router.patch("/me", requireAuth, async (req, res) => {
       webhook_url !== undefined,
       webhook_url?.trim() || null,
       breach_monitoring_enabled === undefined ? null : !!breach_monitoring_enabled,
+      digest_day_of_week === undefined ? null : digest_day_of_week,
     ]
   );
   res.json(rows[0]);

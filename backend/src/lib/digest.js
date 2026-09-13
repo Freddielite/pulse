@@ -82,15 +82,24 @@ export async function sendDigest(user) {
   return { sent: true };
 }
 
-// Cron-tick-driven sweep: every user with digest_enabled and a cadence
-// clock that's due gets one sent, then the clock resets. Unscoped to a
-// single user for the same reason runCertSweep/runSecuritySweep are -
-// the cron tick is the only place this ever runs at all.
+// Cron-tick-driven sweep: every user with digest_enabled, whose
+// digest_day_of_week matches today (UTC, 0=Sunday..6=Saturday - the
+// database's EXTRACT(DOW ...) and JS's Date.getDay() agree on this
+// numbering, so the frontend's day picker needs no translation table),
+// and who hasn't already gotten one this week gets one sent. The
+// digest_sent_at >= 6 days ago guard (not a calendar-week boundary) is
+// deliberately loose: cron ticks aren't perfectly aligned to midnight,
+// so a strict 7-day check could occasionally skip a week if a tick
+// landed a few minutes early; 6 days can't double-send in the same
+// week since day-of-week only repeats every 7. Unscoped to a single
+// user for the same reason runCertSweep/runSecuritySweep are - the cron
+// tick is the only place this ever runs at all.
 export async function runDigestSweep() {
   const { rows: due } = await pool.query(
     `SELECT * FROM users
      WHERE digest_enabled = true
-       AND (digest_sent_at IS NULL OR digest_sent_at <= now() - interval '${DIGEST_INTERVAL_DAYS} days')
+       AND digest_day_of_week = EXTRACT(DOW FROM now())
+       AND (digest_sent_at IS NULL OR digest_sent_at <= now() - interval '6 days')
      LIMIT $1`,
     [MAX_DIGESTS_PER_RUN]
   );

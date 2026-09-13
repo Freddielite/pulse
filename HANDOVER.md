@@ -172,6 +172,35 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Fixed settings toggles clobbering each other, and added a
+  digest day-of-week picker.**
+  - Root cause of "toggling breach monitoring sometimes flips the
+    weekly digest switch too" (and the same could happen between *any*
+    two settings changed close together): every handler in
+    `SettingsView.jsx` called `onUserUpdated(fullServerResponse)`,
+    replacing the entire client-side user object with a snapshot from
+    whichever PATCH request's response happened to resolve. Two
+    requests fired close together can have their responses arrive out
+    of order relative to when each one's underlying DB write actually
+    landed - whichever response is applied last wins, and if that
+    response's snapshot was taken before the other request's change
+    went in, it visibly reverts it. The backend's PATCH /me itself was
+    never the problem (each field is written with its own COALESCE
+    against the current column, so the database itself is fine) - this
+    was purely a client-side "replace the whole object" bug. Every
+    handler in `SettingsView.jsx` now uses the functional setState form
+    and merges only the specific field(s) it's responsible for onto
+    whatever the latest state is, rather than overwriting the whole
+    user object.
+  - New `digest_day_of_week` column on `users` (0=Sunday..6=Saturday,
+    matching `Date.getDay()` so no lookup table is needed anywhere),
+    defaulting to Sunday. `runDigestSweep()` in `lib/digest.js` now only
+    sends on a day-of-week match instead of a rolling "7 days since last
+    send" clock that could drift onto any day. `PATCH /api/auth/me`
+    validates it's an integer 0-6. Frontend: a "Send on" day picker
+    appears under the weekly digest toggle once it's turned on
+    (`SettingsView.jsx`, using the existing `Dropdown` component).
+
 - **Tier 3: remediation guidance, client-side secret scanning, CSP
   violation ingestion.**
   - Every scanner finding that was missing a "how to fix" now has one -

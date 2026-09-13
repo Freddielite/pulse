@@ -36,13 +36,15 @@ export async function migrate() {
     -- other alert channel here. digest_sent_at is the cadence clock:
     -- NULL means never sent, so it's immediately due once turned on
     -- (same "due" pattern as cert_checked_at/security_scanned_at on
-    -- monitors), and runDigestSweep() only ever looks at whether 7 days
-    -- have passed since this, never a day-of-week schedule - so turning
-    -- it on any day of the week settles into "once every 7 days from
-    -- when you turned it on" rather than everyone converging on the
-    -- same Monday.
+    -- monitors). digest_day_of_week (0=Sunday..6=Saturday, matching JS's
+    -- own Date.getDay() so the frontend needs no lookup table) is the
+    -- schedule: runDigestSweep() in lib/digest.js only sends on a match
+    -- against the current UTC day, with digest_sent_at as a "already went
+    -- out this week" guard rather than the whole cadence clock it used to
+    -- be. Defaults to Sunday, changeable any time in Settings.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_sent_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_day_of_week SMALLINT NOT NULL DEFAULT 0;
 
     -- Per-channel, per-event-kind opt-outs for push and Telegram (email
     -- stays all-or-nothing via alert_email, unchanged; the weekly digest

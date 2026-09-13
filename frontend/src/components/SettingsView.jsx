@@ -15,6 +15,7 @@ import {
 import { usePush } from "../hooks/usePush.js";
 import { QRCodeSVG } from "qrcode.react";
 import OrganizationsPanel from "./OrganizationsPanel.jsx";
+import Dropdown from "./Dropdown.jsx";
 
 // Shared shape between the push and Telegram checkbox lists below - keep
 // in sync with DEFAULT_NOTIFICATION_PREFS in the backend's
@@ -25,6 +26,20 @@ const EVENT_TYPES = [
   { key: "contentChanged", label: "Content changes", desc: "A monitored page's content changes since the last check." },
   { key: "expiring", label: "Certificate & domain expiry", desc: "An SSL cert or domain registration is expiring soon." },
   { key: "security", label: "Security findings", desc: "A medium-or-higher severity security scan finding." },
+];
+
+// 0=Sunday..6=Saturday - matches JS's own Date.getDay() and the
+// backend's EXTRACT(DOW FROM now()), so this is the one place that
+// ordering needs to be declared and every other layer just agrees with
+// it.
+const DAY_OPTIONS = [
+  { value: 0, label: "Sunday" },
+  { value: 1, label: "Monday" },
+  { value: 2, label: "Tuesday" },
+  { value: 3, label: "Wednesday" },
+  { value: 4, label: "Thursday" },
+  { value: 5, label: "Friday" },
+  { value: 6, label: "Saturday" },
 ];
 
 function NotificationEventList({ prefs, onChange }) {
@@ -107,7 +122,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     setSavingEmail(true);
     try {
       const updated = await updateMe({ alert_email: alertEmail });
-      onUserUpdated(updated);
+      onUserUpdated((current) => ({ ...current, alert_email: updated.alert_email }));
       toast("Alert email saved.");
     } catch (err) {
       toast(err.message, "error");
@@ -119,18 +134,22 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   async function handleNotificationPrefChange(channel, key, value) {
     // Optimistic - flip it locally right away, then reconcile with
     // whatever the server actually saved (same shape as every other
-    // toggle in this view).
+    // toggle in this view). Every update here goes through the
+    // functional setState form and only ever touches notification_prefs
+    // - never the whole user object - so this can't clobber a digest,
+    // breach, webhook, etc. change that lands from a different in-flight
+    // request while this one is still pending.
     const prevPrefs = user.notification_prefs;
     const optimistic = {
       ...prevPrefs,
       [channel]: { ...prevPrefs?.[channel], [key]: value },
     };
-    onUserUpdated({ ...user, notification_prefs: optimistic });
+    onUserUpdated((current) => ({ ...current, notification_prefs: optimistic }));
     try {
       const updated = await updateMe({ notification_prefs: { [channel]: { [key]: value } } });
-      onUserUpdated(updated);
+      onUserUpdated((current) => ({ ...current, notification_prefs: updated.notification_prefs }));
     } catch (err) {
-      onUserUpdated({ ...user, notification_prefs: prevPrefs });
+      onUserUpdated((current) => ({ ...current, notification_prefs: prevPrefs }));
       toast(err.message, "error");
     }
   }
@@ -139,7 +158,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     setDigestBusy(true);
     try {
       const updated = await updateMe({ digest_enabled: !user.digest_enabled });
-      onUserUpdated(updated);
+      onUserUpdated((current) => ({ ...current, digest_enabled: updated.digest_enabled }));
       toast(updated.digest_enabled ? "Weekly digest turned on." : "Weekly digest turned off.");
     } catch (err) {
       toast(err.message, "error");
@@ -148,11 +167,24 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     }
   }
 
+  async function handleDigestDayChange(day) {
+    // Optimistic - the day only matters for a future send, so there's
+    // nothing to reconcile against beyond what was just picked.
+    onUserUpdated((current) => ({ ...current, digest_day_of_week: day }));
+    try {
+      const updated = await updateMe({ digest_day_of_week: day });
+      onUserUpdated((current) => ({ ...current, digest_day_of_week: updated.digest_day_of_week }));
+      toast(`Weekly digest will send on ${DAY_OPTIONS[day].label}s.`);
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
   async function handleBreachToggle() {
     setBreachBusy(true);
     try {
       const updated = await updateMe({ breach_monitoring_enabled: !user.breach_monitoring_enabled });
-      onUserUpdated(updated);
+      onUserUpdated((current) => ({ ...current, breach_monitoring_enabled: updated.breach_monitoring_enabled }));
       toast(updated.breach_monitoring_enabled ? "Breach monitoring turned on." : "Breach monitoring turned off.");
     } catch (err) {
       toast(err.message, "error");
@@ -166,7 +198,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     setSavingWebhookUrl(true);
     try {
       const updated = await updateMe({ webhook_url: webhookUrl.trim() });
-      onUserUpdated(updated);
+      onUserUpdated((current) => ({ ...current, webhook_url: updated.webhook_url }));
       toast(webhookUrl.trim() ? "Webhook URL saved." : "Webhook disconnected.");
     } catch (err) {
       toast(err.message, "error");
@@ -207,7 +239,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
       setTotpBackupCodes(result.backup_codes);
       setTotpSetup(null);
       setTotpConfirmCode("");
-      onUserUpdated({ ...user, totp_enabled: true });
+      onUserUpdated((current) => ({ ...current, totp_enabled: true }));
       toast("Two-factor authentication turned on.");
     } catch (err) {
       toast(err.message, "error");
@@ -221,7 +253,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     setTotpBusy(true);
     try {
       await disable2fa(totpDisablePassword);
-      onUserUpdated({ ...user, totp_enabled: false });
+      onUserUpdated((current) => ({ ...current, totp_enabled: false }));
       setShowTotpDisable(false);
       setTotpDisablePassword("");
       toast("Two-factor authentication turned off.");
@@ -251,7 +283,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
     setSavingTelegramChatId(true);
     try {
       const updated = await updateMe({ telegram_chat_id: telegramChatId.trim() });
-      onUserUpdated(updated);
+      onUserUpdated((current) => ({ ...current, telegram_chat_id: updated.telegram_chat_id }));
       const status = await getTelegramStatus().catch(() => null);
       if (status) setTelegramStatus(status);
       toast("Telegram chat ID saved.");
@@ -366,7 +398,9 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
               {user.digest_enabled && (
                 <>
                   {" "}
-                  {user.digest_sent_at ? `Last sent ${new Date(user.digest_sent_at).toLocaleDateString()}.` : "Not sent yet - due on the next cron tick."}
+                  {user.digest_sent_at
+                    ? `Last sent ${new Date(user.digest_sent_at).toLocaleDateString()}.`
+                    : `Not sent yet - due on the next ${DAY_OPTIONS[user.digest_day_of_week ?? 0].label}.`}
                 </>
               )}
             </div>
@@ -375,6 +409,17 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
             <span className="pl-toggle__knob" />
           </button>
         </div>
+        {user.digest_enabled && (
+          <div className="pl-settings-row" style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--panel-border)" }}>
+            <div>
+              <div className="pl-settings-row__title">Send on</div>
+              <div className="pl-settings-row__desc">Which day of the week the summary goes out.</div>
+            </div>
+            <div style={{ width: 140 }}>
+              <Dropdown value={user.digest_day_of_week ?? 0} onChange={handleDigestDayChange} options={DAY_OPTIONS} />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="pl-section-label">Breach monitoring</div>
