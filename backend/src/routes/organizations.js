@@ -274,8 +274,16 @@ router.delete("/:id/members/:memberId", async (req, res) => {
 
   const isSelf = target[0].user_id === req.userId;
   if (!isSelf) {
-    const allowed = await requireOrgRole(req.userId, req.params.id, "admin");
-    if (!allowed) return res.status(403).json({ error: "admin access required" });
+    // Removing an owner is at least as sensitive as changing anyone's
+    // role to/from owner (see PATCH above, which requires owner for
+    // that) - "admin" here would otherwise let a lower-ranked admin
+    // unilaterally kick out a higher-ranked owner as long as a second
+    // owner exists to dodge the zero-owner guard below. The required
+    // rank scales with the target's own rank instead of being a flat
+    // "admin+" check.
+    const required = target[0].role === "owner" ? "owner" : "admin";
+    const allowed = await requireOrgRole(req.userId, req.params.id, required);
+    if (!allowed) return res.status(403).json({ error: `${required} access required` });
   }
   if (target[0].role === "owner" && (await countOwners(req.params.id)) <= 1) {
     return res.status(400).json({ error: "an organization needs at least one owner - promote someone else first" });

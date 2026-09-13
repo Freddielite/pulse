@@ -17,6 +17,25 @@ import { securityHeaders } from "./middleware/securityHeaders.js";
 
 const app = express();
 
+// Both of these fall back to something that keeps the app running rather
+// than refusing to boot - crashing on a misconfigured free-tier deploy
+// is its own kind of outage - but a fallback that's silent is worse than
+// no fallback at all: it means "insecure" and "working" look identical
+// in the logs. Loud here is the entire point.
+if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
+  console.error(
+    "SECURITY WARNING: SESSION_SECRET is not set. Falling back to a hardcoded, publicly-known value - " +
+      "anyone can forge a valid session cookie for any account. Set SESSION_SECRET in this service's environment."
+  );
+}
+if (process.env.NODE_ENV === "production" && !process.env.CRON_SECRET) {
+  console.error(
+    "SECURITY WARNING: CRON_SECRET is not set. POST /api/cron/tick is reachable by anyone with no " +
+      "authentication at all - they can trigger security scans, DNS/CT sweeps, and digest sends across every " +
+      "user on demand. Set CRON_SECRET here and add the same value to whatever calls this endpoint (cron-job.org)."
+  );
+}
+
 // Render sits behind a proxy that terminates TLS, so without this Express
 // never sees the connection as "secure" and refuses to set secure cookies
 // in production, silently breaking login.

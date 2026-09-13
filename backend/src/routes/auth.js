@@ -196,10 +196,17 @@ router.post("/2fa/confirm", requireAuth, async (req, res) => {
 // Password confirmation required to turn 2FA off, same reasoning as
 // requiring the current password to change it - this is exactly the
 // kind of downgrade an attacker with a hijacked session would want.
-router.post("/2fa/disable", requireAuth, async (req, res) => {
+// Password-gated like change-password, and exactly as brute-forceable if
+// left unlimited - same rate-limit shape as that route, for the same
+// reason. This one matters even more for a hijacked-session attacker
+// specifically: if they have a live session but not the actual password
+// (stolen cookie rather than stolen credentials), this endpoint is an
+// unlimited password oracle unless it's capped the same way login is.
+router.post("/2fa/disable", requireAuth, authRateLimit({ max: 5, windowMinutes: 15, identifierField: "__none__" }), async (req, res) => {
   const { password } = req.body;
   const { rows } = await pool.query(`SELECT password_hash FROM users WHERE id = $1`, [req.userId]);
   if (!rows[0] || !(await bcrypt.compare(password || "", rows[0].password_hash))) {
+    await req.recordAuthFailure();
     return res.status(401).json({ error: "incorrect password" });
   }
   await pool.query(

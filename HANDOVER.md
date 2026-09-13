@@ -89,6 +89,39 @@ default, not a broken one.
 
 ## Known limitations, stated plainly
 
+- **`SESSION_SECRET` and `CRON_SECRET` fall back to something that keeps
+  the app running rather than refusing to start, and both fallbacks are
+  insecure - a publicly-known hardcoded string for session signing, and
+  no auth at all on `POST /api/cron/tick` for the cron secret.** Set
+  both as real environment variables on the Render service. `index.js`
+  now logs a loud warning at boot if either is missing in production,
+  so this shows up in the logs instead of just working in a way that
+  looks identical to being configured correctly.
+- **Monitor URLs and the webhook URL are unrestricted - nothing stops
+  either from pointing at an internal/private address.** This is
+  inherent to what an uptime monitor does (it has to be able to fetch
+  whatever URL is given it), not a bug to patch out, but it does mean a
+  monitor or webhook URL is a way to make this app's own server issue a
+  request somewhere it otherwise couldn't reach - a monitor's response
+  is shown back to whoever owns it, so that one carries more signal
+  than the webhook (fire-and-forget, no response body surfaced) if
+  someone with account access ever pointed either at Render's internal
+  network rather than a real site. Worth knowing about, not urgent to
+  block given the current small/trusted user base - flagging so it's a
+  deliberate trade-off rather than an unnoticed gap.
+- **Password change doesn't invalidate other active sessions for that
+  account.** If a session was ever compromised independently of the
+  password (a stolen cookie, a shared/unlocked device), changing the
+  password doesn't kick that session out - sessions are stored keyed by
+  session ID, not by user, so there's currently no query that could find
+  "every other session for this user" to clear. Fixable, but needs a
+  user_id column added to the session store rather than a quick patch.
+- **Signup's "an account with that email already exists" response
+  confirms whether an address is registered.** Standard trade-off (most
+  apps do this for the sake of a clear error message) rather than an
+  oversight, but it is a minor account-enumeration surface if that's
+  ever a concern for this deployment.
+
 - **Domain (WHOIS) expiry is still best-effort, by nature of WHOIS
   itself.** Response formats aren't standardized across registrars -
   `lib/certCheck.js` now matches a wider set of field names (including
@@ -171,6 +204,34 @@ default, not a broken one.
   cap with distinct-looking rows for what's really one problem.
 
 ## Recent changes
+
+- **Security audit pass: two real gaps fixed, several noted as
+  deliberate trade-offs (see Known limitations).**
+  - **Fixed: an org admin could remove an org owner.** `DELETE
+    /:id/members/:memberId` only required "admin" to remove any
+    non-self member, including one whose role was "owner" - a lower-
+    ranked admin could unilaterally kick out a higher-ranked owner as
+    long as a second owner existed to dodge the zero-owner guard. Now
+    requires owner-level to remove a member who is themselves an owner,
+    matching the role-change route's existing owner-only rule
+    (`organizations.js`).
+  - **Fixed: `POST /api/auth/2fa/disable` had no rate limit** despite
+    checking the account's actual password via bcrypt - unlimited
+    attempts at a password oracle, most relevant to an attacker who has
+    a hijacked session but not the real password. Now rate-limited the
+    same way `/change-password` already is (`auth.js`).
+  - **Added: loud startup warnings for insecure env-var fallbacks.**
+    `SESSION_SECRET` (falls back to a hardcoded string - forgeable
+    session cookies) and `CRON_SECRET` (falls back to no auth at all on
+    the cron tick endpoint) both silently kept the app running before.
+    `index.js` now logs an explicit warning at boot when either is
+    missing in production, so a misconfigured deploy shows up in the
+    logs instead of looking identical to a correctly configured one.
+  - Everything else the audit turned up - the checked routes, the
+    session/cookie config, header setup, token hashing, the CORS
+    default, SSRF exposure via monitor/webhook URLs - is either already
+    handled correctly or a deliberate trade-off written up in Known
+    limitations rather than something silently missed.
 
 - **Fixed settings toggles clobbering each other, and added a
   digest day-of-week picker.**
