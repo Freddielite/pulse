@@ -4,13 +4,16 @@
 // as personal as it always was; these helpers only come into play once
 // something has an organization_id set.
 //
-// Role model, deliberately just three: 'owner' (can rename/brand/delete
-// the org, change anyone's role, always at least one per org),
-// 'admin' (can invite/remove members, create monitors under the org),
-// 'member' (can see and use what the org owns). See the note in
-// HANDOVER.md about the one place role isn't yet enforced: editing or
-// deleting an org's existing monitors is currently open to any member,
-// not gated to admin+, to keep this change's surface area contained.
+// Role model, deliberately just three: 'owner' (can delete the org and
+// change anyone's role, always at least one per org), 'admin' (can
+// invite/remove members, rename/brand the org, create monitors and
+// status pages under it, and manage - edit/delete/snooze/share - any
+// monitor or status page the org owns), 'member' (can see and use what
+// the org owns, and manage only what they personally created). Enforced
+// via loadMonitorForMutation in routes/monitors.js and
+// loadStatusPageForMutation in routes/statusPages.js, both of which
+// gate every mutating route - not just org membership itself - on
+// isCreator || isOrgAdmin.
 
 import { pool } from "../db.js";
 

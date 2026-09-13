@@ -165,6 +165,27 @@ default, not a broken one.
   too, so "Unsnooze all" doesn't appear based on an org monitor's
   snooze state that the button can't actually touch.
 
+- **The dashboard's swipe-to-Snooze/Delete row missed the same
+  treatment and has now had it applied.** The previous entry covered
+  `MonitorDetail.jsx` and `StatusPagesView.jsx`, but `Dashboard.jsx`'s
+  card-grid swipe actions (`GroupedMonitorList`) were left showing
+  Snooze/Delete on every card regardless of role - a member could
+  swipe any org monitor's card, including ones they didn't create,
+  and see the exact same two buttons an owner would. Backend still
+  rejected the actual request via `loadMonitorForMutation`, so nothing
+  was ever exploitable, but the visible affordance was itself the bug:
+  it looked like a member had owner/admin-level control from the list
+  view. `Dashboard.jsx` now fetches `listOrganizations()` once (same
+  pattern as `StatusPagesView.jsx`'s `orgRoles`) and computes
+  `canManageMonitor()` per card - creator, or admin+ on the monitor's
+  org - passing an empty `actions` array to `SwipeableRow` when it's
+  false. `SwipeableRow.jsx` itself had a bug this exposed: its reveal
+  width was a hardcoded 152px (two buttons) regardless of how many
+  actions it was actually given, so an empty `actions` array would
+  have opened onto 152px of visible dead space. It now sizes the
+  reveal to `actions.length * 76`, and renders the card with no swipe
+  wrapper at all when there are zero actions.
+
 - **Frontend now hides the actions a member's role blocks, instead of
   showing buttons that 403 on click.** The previous entry (member role
   enforcement) was backend-only - correct in that it actually stopped
@@ -985,9 +1006,9 @@ default suite.
 "Recent changes" above.**
 
 - ~~Teams/multi-tenant with roles~~ - done (`lib/orgAccess.js`,
-  `routes/organizations.js`); role isn't yet enforced on editing/deleting
-  an *existing* org monitor, only on creation and org management - see
-  the "scoped deliberately" note above.
+  `routes/organizations.js`). The "scoped deliberately" gap noted above
+  (member could edit/delete an existing org monitor) was closed in a
+  later pass - see "Member role is now actually enforced..." further up.
 - ~~White-labeled client reports & branded status pages~~ - done;
   `custom_domain` is a stored reminder field, not actual DNS/routing
   automation.

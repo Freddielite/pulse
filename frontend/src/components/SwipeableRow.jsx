@@ -1,14 +1,23 @@
 import { useRef, useState } from "react";
 
-const REVEAL_WIDTH = 152; // two 76px action buttons
+const ACTION_WIDTH = 76;
 const OVERSCROLL = 20; // small rubber-band past full reveal
 
 export default function SwipeableRow({ actions, children }) {
+  // Sized to however many actions this row actually has - a viewer with
+  // no permitted actions (see Dashboard's canManageMonitor) gets an
+  // empty array here, and REVEAL_WIDTH of 0 means there's nothing to
+  // swipe open: no blank gap, no drag range, just the card.
+  const REVEAL_WIDTH = actions.length * ACTION_WIDTH;
   const [dragX, setDragX] = useState(0);
   const [open, setOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const startRef = useRef(null);
   const axisRef = useRef(null);
+
+  if (REVEAL_WIDTH === 0) {
+    return <div className="pl-swipe-row__content">{children}</div>;
+  }
 
   function handleTouchStart(e) {
     const t = e.touches[0];

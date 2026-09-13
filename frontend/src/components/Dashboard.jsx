@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import MonitorCard from "./MonitorCard.jsx";
 import MonitorCardSkeleton from "./MonitorCardSkeleton.jsx";
 import SwipeableRow from "./SwipeableRow.jsx";
 import PullToRefresh from "./PullToRefresh.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
-import { checkNow, snoozeAllMonitors, unsnoozeAllMonitors, snoozeMonitor, unsnoozeMonitor, deleteMonitor } from "../api.js";
+import { checkNow, snoozeAllMonitors, unsnoozeAllMonitors, snoozeMonitor, unsnoozeMonitor, deleteMonitor, listOrganizations } from "../api.js";
 
 function isSnoozedNow(m) {
   return !!m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now();
@@ -33,6 +33,32 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
   // regardless of whether the viewer is a member, admin, or owner.
   const personalMonitors = monitors.filter((m) => !m.organization_id && m.user_id === currentUser?.id);
   const anySnoozed = personalMonitors.some((m) => m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now());
+
+  // Role per org the current user belongs to, keyed by org id - same
+  // pattern as StatusPagesView/MonitorDetail, fetched once here since
+  // this view renders every monitor's card at once. Missing from this
+  // list originally: the swipe actions below rendered Snooze/Delete for
+  // every card unconditionally, so a plain member saw (and could tap)
+  // the same actions an admin/owner would, even though the server-side
+  // loadMonitorForMutation gate would 403 the request - confusing at
+  // best, and the visible affordance itself was the bug being reported.
+  const [orgRoles, setOrgRoles] = useState({});
+
+  useEffect(() => {
+    listOrganizations()
+      .then((orgs) => setOrgRoles(Object.fromEntries(orgs.map((o) => [o.id, o.role]))))
+      .catch(() => {}); // failing closed (canManageMonitor below defaults to false) is the safe direction to be wrong in
+  }, []);
+
+  // Mirrors the backend's loadMonitorForMutation exactly, same as
+  // MonitorDetail's canManage: the monitor's own creator can always
+  // manage it, otherwise only admin+ on the org that owns it.
+  function canManageMonitor(monitor) {
+    if (!currentUser) return false;
+    if (monitor.user_id === currentUser.id) return true;
+    if (!monitor.organization_id) return false;
+    return orgRoles[monitor.organization_id] === "admin" || orgRoles[monitor.organization_id] === "owner";
+  }
 
   async function handleToggleSnooze(monitor) {
     try {
@@ -173,7 +199,7 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
           </div>
         )
       ) : (
-        <GroupedMonitorList monitors={monitors} onSelect={onSelect} onToggleSnooze={handleToggleSnooze} onDelete={setConfirmingDeleteId} />
+        <GroupedMonitorList monitors={monitors} onSelect={onSelect} onToggleSnooze={handleToggleSnooze} onDelete={setConfirmingDeleteId} canManageMonitor={canManageMonitor} />
       )}
       </PullToRefresh>
 
@@ -193,18 +219,21 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
 // Only bothers grouping when there's actually more than one group present.
 // A single flat list is simpler to scan than a UI with one lonely group
 // header on it, so that case renders exactly like it always did.
-function GroupedMonitorList({ monitors, onSelect, onToggleSnooze, onDelete }) {
+function GroupedMonitorList({ monitors, onSelect, onToggleSnooze, onDelete, canManageMonitor }) {
   const groupNames = [...new Set(monitors.map((m) => m.group_name).filter(Boolean))].sort();
 
   function renderCard(m) {
-    return (
-      <SwipeableRow
-        key={m.id}
-        actions={[
+    // A member with only view access on this monitor's org gets no swipe
+    // actions at all - not Edit/Delete/Snooze reachable through a tap
+    // that then 403s, just the card itself to open and read.
+    const actions = canManageMonitor(m)
+      ? [
           { label: isSnoozedNow(m) ? "Unsnooze" : "Snooze 1h", tone: "snooze", onClick: () => onToggleSnooze(m) },
           { label: "Delete", tone: "delete", onClick: () => onDelete(m.id) },
-        ]}
-      >
+        ]
+      : [];
+    return (
+      <SwipeableRow key={m.id} actions={actions}>
         <MonitorCard monitor={m} onClick={() => onSelect(m)} />
       </SwipeableRow>
     );
