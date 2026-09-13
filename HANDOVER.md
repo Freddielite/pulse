@@ -186,6 +186,18 @@ default, not a broken one.
   reveal to `actions.length * 76`, and renders the card with no swipe
   wrapper at all when there are zero actions.
 
+- **"Snooze all monitors" now covers org monitors an admin/owner
+  manages, not just personal ones.** The previous scoping (`snooze-all`/
+  `unsnooze-all` limited to `user_id = $1`) meant an admin whose
+  monitors were entirely org-owned never saw the panel at all - it was
+  gated on having at least one *personal* monitor, and even then only
+  ever touched personal ones. Both routes in `monitors.js` now match
+  `user_id = $1 OR organization_id IN (... role IN ('admin','owner'))`,
+  and `Dashboard.jsx`'s panel visibility/eligibility (`manageableMonitors`,
+  replacing the old `personalMonitors`) is computed with the same
+  `canManageMonitor()` used for the swipe actions below, so a plain
+  member still doesn't get this panel for monitors they don't manage.
+
 - **Frontend now hides the actions a member's role blocks, instead of
   showing buttons that 403 on click.** The previous entry (member role
   enforcement) was backend-only - correct in that it actually stopped

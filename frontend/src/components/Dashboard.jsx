@@ -23,25 +23,10 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const upCount = monitors.filter((m) => m.current_status === "up").length;
   const downCount = monitors.filter((m) => m.current_status === "down").length;
-  // The bulk snooze-all/unsnooze-all/check-now-style actions below only
-  // ever touch monitors this specific user personally owns - that was a
-  // deliberate scoping choice from when orgs were added (a bulk action
-  // silently reaching into a teammate's monitors felt like the wrong
-  // default), not something tied to role. So the panel itself is only
-  // worth showing when there's at least one personal monitor for it to
-  // act on - otherwise every button in it is a guaranteed no-op,
-  // regardless of whether the viewer is a member, admin, or owner.
-  const personalMonitors = monitors.filter((m) => !m.organization_id && m.user_id === currentUser?.id);
-  const anySnoozed = personalMonitors.some((m) => m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now());
 
   // Role per org the current user belongs to, keyed by org id - same
   // pattern as StatusPagesView/MonitorDetail, fetched once here since
-  // this view renders every monitor's card at once. Missing from this
-  // list originally: the swipe actions below rendered Snooze/Delete for
-  // every card unconditionally, so a plain member saw (and could tap)
-  // the same actions an admin/owner would, even though the server-side
-  // loadMonitorForMutation gate would 403 the request - confusing at
-  // best, and the visible affordance itself was the bug being reported.
+  // this view renders every monitor's card at once.
   const [orgRoles, setOrgRoles] = useState({});
 
   useEffect(() => {
@@ -52,13 +37,27 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
 
   // Mirrors the backend's loadMonitorForMutation exactly, same as
   // MonitorDetail's canManage: the monitor's own creator can always
-  // manage it, otherwise only admin+ on the org that owns it.
+  // manage it, otherwise only admin+ on the org that owns it. Used both
+  // to decide which swipe actions a given card gets, and which monitors
+  // count toward the bulk "Snooze all" panel below.
   function canManageMonitor(monitor) {
     if (!currentUser) return false;
     if (monitor.user_id === currentUser.id) return true;
     if (!monitor.organization_id) return false;
     return orgRoles[monitor.organization_id] === "admin" || orgRoles[monitor.organization_id] === "owner";
   }
+
+  // The bulk snooze-all/unsnooze-all actions touch every monitor the
+  // viewer manages - their own personal monitors, plus any org monitor
+  // where they're admin+ on that org (matches the broadened backend
+  // query in routes/monitors.js). A plain member's org monitors are
+  // excluded here even though the member sees and gets paged by them -
+  // bulk-snoozing monitors they don't manage would be the same
+  // overreach loadMonitorForMutation blocks one at a time. So the panel
+  // itself is only worth showing when there's at least one manageable
+  // monitor - otherwise every button in it is a guaranteed no-op.
+  const manageableMonitors = monitors.filter(canManageMonitor);
+  const anySnoozed = manageableMonitors.some((m) => m.snoozed_until && new Date(m.snoozed_until).getTime() > Date.now());
 
   async function handleToggleSnooze(monitor) {
     try {
@@ -163,7 +162,7 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
         </div>
       </div>
 
-      {personalMonitors.length > 0 && (
+      {manageableMonitors.length > 0 && (
         <div className="pl-panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
           {anySnoozed ? (
             <>
