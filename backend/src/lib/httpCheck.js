@@ -4,6 +4,23 @@ const DEFAULT_CHECK_TIMEOUT_MS = 15000;
 const RETRY_DELAY_MS = 4000;
 export const CONTENT_HASH_VERSION = 2;
 
+// Node's built-in fetch sends no real User-Agent (and no Accept /
+// Accept-Language) unless told to. That's invisible against a plain
+// backend, but a growing share of frontend hosting - Vercel's own
+// firewall, Cloudflare in front of a custom domain - runs bot
+// mitigation that specifically challenges or blocks requests shaped
+// like a script rather than a browser, missing/default User-Agent
+// being the single biggest tell. The check then sees a 403 or a
+// challenge page instead of the real 200 and reports a false outage.
+// Sending ordinary browser-shaped headers by default (still
+// overridable per monitor via auth_header_name/value below) is enough
+// to pass most such filters without needing a real browser engine.
+const DEFAULT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -52,7 +69,7 @@ async function runSingleAttempt(monitor) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const headers = {};
+  const headers = { ...DEFAULT_HEADERS };
   if (monitor.auth_header_name && monitor.auth_header_value) {
     headers[monitor.auth_header_name] = monitor.auth_header_value;
   }

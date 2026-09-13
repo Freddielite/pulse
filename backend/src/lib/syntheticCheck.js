@@ -1,5 +1,15 @@
 const DEFAULT_STEP_TIMEOUT_MS = 15000;
 
+// See httpCheck.js for why this exists: no User-Agent/Accept headers
+// means Vercel/Cloudflare-style bot mitigation on a frontend can 403
+// or challenge a check that a real browser would sail through, and
+// that reads as a false outage rather than what it actually is.
+const DEFAULT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
 // Substitutes {{varName}} in a string with a value captured by an
 // earlier step's `extract`. Left untouched if the variable was never
 // set (a bad/missing extract on step 1 then surfaces as a normal step-2
@@ -36,7 +46,7 @@ export async function runSyntheticCheck(monitor) {
   const vars = {};
   let lastStatusCode = null;
 
-  const authHeaders = {};
+  const authHeaders = { ...DEFAULT_HEADERS };
   if (monitor.auth_header_name && monitor.auth_header_value) {
     authHeaders[monitor.auth_header_name] = monitor.auth_header_value;
   }

@@ -150,6 +150,27 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Uptime/synthetic checks now send a real browser-shaped User-Agent,
+  Accept, and Accept-Language.** Root cause of false downtime alerts
+  that only ever hit frontend-hosted sites: Node's built-in `fetch`
+  sends no meaningful User-Agent by default, and a growing share of
+  frontend hosting (Vercel's own firewall, Cloudflare in front of a
+  custom domain) runs bot mitigation that specifically challenges or
+  blocks requests shaped like a script instead of a browser - a
+  missing/default User-Agent is the single biggest tell it looks for.
+  The check then saw a 403 or a challenge page instead of the site's
+  real 200 and reported an outage that never happened. A backend API
+  on Render almost never sits behind this kind of filter, which is
+  why the false alerts were frontend-specific. `httpCheck.js` and
+  `syntheticCheck.js` both now default to ordinary browser headers,
+  still overridable per monitor via `auth_header_name`/`auth_header_value`.
+  This isn't a guaranteed fix against every WAF (a JS-challenge that
+  needs an actual browser engine to solve is out of reach without the
+  synthetic engine becoming an actual headless browser, a deliberate
+  weight trade-off - see "Recent changes" further down), but it
+  resolves the ordinary header-based bot filtering that's the far more
+  common case.
+
 - **The dashboard's "Snooze all monitors" panel no longer shows up when
   it would be a guaranteed no-op.** `snoozeAllMonitors`/
   `unsnoozeAllMonitors` only ever act on monitors the clicking user
