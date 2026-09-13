@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare, getSecurityHistory, getSecurityEvents, acknowledgeSecurityEvent, getMonitorTls, getMonitorDns, runDnsCheck, getMonitorCertificates, runCertificateCheck, createMonitor, getOrganization, BASE } from "../api.js";
+import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare, getSecurityHistory, getSecurityEvents, acknowledgeSecurityEvent, getMonitorTls, getMonitorDns, runDnsCheck, getMonitorCertificates, runCertificateCheck, createMonitor, getOrganization, getCspViolations, clearCspViolations, BASE } from "../api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
@@ -7,6 +7,7 @@ import ResponseTimeChart from "./ResponseTimeChart.jsx";
 import SecurityScanPanel from "./SecurityScanPanel.jsx";
 import SecurityTrendChart from "./SecurityTrendChart.jsx";
 import SecurityTimeline from "./SecurityTimeline.jsx";
+import CspViolations from "./CspViolations.jsx";
 import { TlsPanel, DnsPanel, CertificatesPanel } from "./DomainPanels.jsx";
 
 const SNOOZE_OPTIONS = [
@@ -42,6 +43,8 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
   const [security, setSecurity] = useState(null);
   const [securityHistory, setSecurityHistory] = useState([]);
   const [securityEvents, setSecurityEvents] = useState([]);
+  const [cspViolations, setCspViolations] = useState([]);
+  const [cspClearing, setCspClearing] = useState(false);
   const [tls, setTls] = useState(null);
   const [dns, setDns] = useState(null);
   const [certificates, setCertificates] = useState(null);
@@ -101,6 +104,9 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
     ? `${BASE.startsWith("http") ? BASE : `${window.location.origin}${BASE}`}/public/monitors/${monitor.share_token}/badge.svg`
     : null;
   const badgeEmbedHtml = badgeUrl ? `<a href="${shareUrl}"><img src="${badgeUrl}" width="168" height="42" alt="${monitor.name} status"></a>` : null;
+  const cspReportUrl = monitor.share_token
+    ? `${BASE.startsWith("http") ? BASE : `${window.location.origin}${BASE}`}/public/monitors/${monitor.share_token}/csp-report`
+    : null;
 
   const snoozed = !!monitor.snoozed_until && new Date(monitor.snoozed_until).getTime() > Date.now();
 
@@ -109,7 +115,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
     // panel rendered for it, so those reads are skipped rather than
     // fetched and discarded.
     const httpish = monitor.monitor_type !== "tcp";
-    const [c, i, u, d, s, sh, se, t, dn, ct] = await Promise.all([
+    const [c, i, u, d, s, sh, se, t, dn, ct, cv] = await Promise.all([
       getMonitorChecks(monitor.id),
       getMonitorIncidents(monitor.id),
       getMonitorUptime(monitor.id),
@@ -120,6 +126,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
       httpish ? getMonitorTls(monitor.id) : Promise.resolve(null),
       httpish ? getMonitorDns(monitor.id) : Promise.resolve(null),
       httpish ? getMonitorCertificates(monitor.id) : Promise.resolve(null),
+      httpish ? getCspViolations(monitor.id) : Promise.resolve([]),
     ]);
     // Guards against a slow response from a monitor you've since navigated
     // away from landing after the fact and overwriting whatever's actually
@@ -137,6 +144,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
     setTls(t);
     setDns(dn);
     setCertificates(ct);
+    setCspViolations(cv || []);
   }
 
   useEffect(() => {
@@ -209,6 +217,18 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
       setSecurityEvents((events) => events.map((event) => (event.id === updated.id ? updated : event)));
     } catch (err) {
       toast(err.message, "error");
+    }
+  }
+
+  async function handleClearCspViolations() {
+    setCspClearing(true);
+    try {
+      await clearCspViolations(monitor.id);
+      setCspViolations([]);
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setCspClearing(false);
     }
   }
 
@@ -318,6 +338,15 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
     }
   }
 
+  async function handleCopyCspReportUrl() {
+    try {
+      await navigator.clipboard.writeText(cspReportUrl);
+      toast("Report URL copied.");
+    } catch {
+      toast("Couldn't copy automatically - select and copy it manually.", "error");
+    }
+  }
+
   function handleDownloadReport() {
     if (!security) return;
 
@@ -368,8 +397,9 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
         lines.push(`${index + 1}. [${String(finding.severity || "medium").toUpperCase()}] ${finding.check}`);
         lines.push(`   ${finding.detail}`);
         if (finding.remediation) {
-          const fix = finding.remediation.nginx || finding.remediation.express;
-          if (fix) lines.push(`   Fix (nginx): ${fix}`);
+          const fix = finding.remediation.general || finding.remediation.nginx || finding.remediation.express;
+          const label = finding.remediation.general ? "Fix" : "Fix (nginx)";
+          if (fix) lines.push(`   ${label}: ${fix}`);
           if (finding.remediation.vercel) lines.push(`   Fix (Vercel): ${finding.remediation.vercel.replace(/\n/g, " ")}`);
         }
         lines.push(``);
@@ -563,6 +593,10 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
       <SecurityTimeline events={securityEvents} onAcknowledge={handleAcknowledgeEvent} canManage={canManage} />
 
       {monitor.monitor_type !== "tcp" && (
+        <CspViolations violations={cspViolations} onClear={handleClearCspViolations} clearing={cspClearing} canManage={canManage} />
+      )}
+
+      {monitor.monitor_type !== "tcp" && (
         <DnsPanel dns={dns} onRefresh={handleRefreshDns} refreshing={dnsRefreshing} canManage={canManage} />
       )}
 
@@ -604,6 +638,22 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <code style={{ fontSize: 11, wordBreak: "break-all", flex: 1 }}>{badgeEmbedHtml}</code>
                 <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleCopyBadgeEmbed}>Copy</button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--panel-border)" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>CSP violation reports</div>
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 8 }}>
+                Point this monitored site's Content-Security-Policy at this URL and real, browser-reported
+                violations show up below instead of only being inferred from the policy's text. Add{" "}
+                <code style={{ fontSize: 11 }}>report-to csp-endpoint</code> plus a{" "}
+                <code style={{ fontSize: 11 }}>Reporting-Endpoints: csp-endpoint="{cspReportUrl}"</code> header
+                (or the older <code style={{ fontSize: 11 }}>report-uri {cspReportUrl}</code> directive for
+                broader browser support).
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <code style={{ fontSize: 11, wordBreak: "break-all", flex: 1 }}>{cspReportUrl}</code>
+                <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleCopyCspReportUrl}>Copy</button>
               </div>
             </div>
           </>

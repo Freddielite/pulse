@@ -66,6 +66,8 @@ export const getSecurityHistory = (id, limit = 60) => apiFetch(`/monitors/${id}/
 export const getSecurityEvents = (id, limit = 50) => apiFetch(`/monitors/${id}/security/events?limit=${limit}`);
 export const acknowledgeSecurityEvent = (id, eventId) =>
   apiFetch(`/monitors/${id}/security/events/${eventId}/acknowledge`, { method: "POST" });
+export const getCspViolations = (id) => apiFetch(`/monitors/${id}/csp-violations`);
+export const clearCspViolations = (id) => apiFetch(`/monitors/${id}/csp-violations`, { method: "DELETE" });
 
 export const getMonitorTls = (id) => apiFetch(`/monitors/${id}/tls`);
 export const getMonitorDns = (id) => apiFetch(`/monitors/${id}/dns`);

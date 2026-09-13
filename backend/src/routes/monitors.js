@@ -504,6 +504,29 @@ router.post("/:id/security/events/:eventId/acknowledge", async (req, res) => {
   res.json(rows[0]);
 });
 
+// Real, browser-reported CSP violations - see routes/public.js for the
+// ingestion side. Read-only, same as every other GET here: a member
+// should see everything a scan or an event feed would show them.
+router.get("/:id/csp-violations", async (req, res) => {
+  const owns = await pool.query(`SELECT id FROM monitors WHERE id = $1 AND (user_id = $2 OR organization_id IN (SELECT organization_id FROM organization_members WHERE user_id = $2))`, [req.params.id, req.userId]);
+  if (owns.rows.length === 0) return res.status(404).json({ error: "monitor not found" });
+  const { rows } = await pool.query(
+    `SELECT * FROM csp_violations WHERE monitor_id = $1 ORDER BY last_seen_at DESC LIMIT 200`,
+    [req.params.id]
+  );
+  res.json(rows);
+});
+
+// Clearing the list is a mutation like anything else that changes what's
+// stored against a monitor - creator or admin+ only, same gate as
+// deleting the monitor itself.
+router.delete("/:id/csp-violations", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
+  await pool.query(`DELETE FROM csp_violations WHERE monitor_id = $1`, [req.params.id]);
+  res.status(204).end();
+});
+
 // TLS posture from the last handshake: protocol, cipher, chain, SANs,
 // fingerprint. Read straight off the monitor row - the cert sweep is what
 // populates it.

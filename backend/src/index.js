@@ -43,6 +43,17 @@ app.use(securityHeaders());
 // this runs, so the stricter global limit below just passes it through
 // rather than re-parsing (and re-rejecting) it.
 app.use("/api/organizations", express.json({ limit: "1mb" }));
+// CSP violation reports (POST /api/public/monitors/:token/csp-report)
+// arrive with Content-Type: application/csp-report or
+// application/reports+json, never application/json - that's what a
+// browser's own Reporting API sets, not something this app controls.
+// express.json() only parses a body whose Content-Type matches its own
+// `type` option, so without this the global JSON parser below would
+// silently skip these requests and the route would see an empty body.
+app.use(
+  "/api/public",
+  express.json({ limit: "64kb", type: ["application/json", "application/csp-report", "application/reports+json"] })
+);
 app.use(express.json({ limit: "64kb" }));
 
 const PgSession = connectPgSimple(session);

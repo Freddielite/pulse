@@ -565,5 +565,32 @@ export async function migrate() {
     ALTER TABLE monitors ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL;
     ALTER TABLE status_pages ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS idx_monitors_organization ON monitors(organization_id);
+
+    -- Passive CSP violation collection: point a monitored site's
+    -- report-uri/report-to at this app's public, token-gated endpoint
+    -- (see routes/public.js) and browsers report real, actually-hit
+    -- violations instead of Pulse only being able to infer risk from the
+    -- policy's text (see scanner.js's header grading). Stored one row
+    -- per distinct violation *shape* (same directive, same blocked URI,
+    -- same source file) with a running count and last-seen time, not one
+    -- row per report - a single misconfigured directive can otherwise
+    -- generate one report per pageview from every visitor, which would
+    -- turn this into an unbounded log rather than a useful list of
+    -- distinct problems to fix.
+    CREATE TABLE IF NOT EXISTS csp_violations (
+      id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      monitor_id          UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      document_uri        TEXT,
+      violated_directive  TEXT,
+      blocked_uri         TEXT,
+      source_file         TEXT,
+      line_number         INTEGER,
+      disposition         TEXT,
+      count               INTEGER NOT NULL DEFAULT 1,
+      first_seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (monitor_id, violated_directive, blocked_uri, source_file)
+    );
+    CREATE INDEX IF NOT EXISTS idx_csp_violations_monitor ON csp_violations(monitor_id, last_seen_at DESC);
   `);
 }

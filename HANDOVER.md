@@ -147,9 +147,70 @@ default, not a broken one.
   automation.** Typing one in doesn't route anything - actually serving
   a client's own domain still needs a CNAME on their end and host
   routing/TLS on this app's end.
+- **Scheduled authenticated deep-scans are still not built.** Everything
+  the scanner does today runs unauthenticated and read-only against
+  whatever a normal visitor can reach. A scan that logs in and checks for
+  things like broken access control between roles is a genuinely
+  different feature - it needs an explicit per-monitor opt-in and
+  consent step (this is the one thing in the app that would act *as* the
+  site owner rather than just observe from outside), a place to store
+  credentials/session state safely, and its own scheduling separate from
+  the passive scan. Deliberately not folded into this round.
+- **The secret scanner only catches a credential sitting in a bundle as
+  a literal matching string.** A key assembled at runtime (fetched from
+  another endpoint, built from pieces, base64-wrapped) won't match, and
+  the pattern list only covers about a dozen well-known formats (AWS,
+  Stripe, GitHub, Slack, SendGrid, Square, generic private-key blocks) -
+  it's the same class of coverage gap gitleaks/truffleHog have, not
+  something specific to this implementation.
+- **CSP violation reports are capped at 300 distinct shapes per monitor**
+  (`MAX_CSP_ROWS_PER_MONITOR` in `routes/public.js`) and deduped by
+  directive+blocked-URI+source-file with a running count, not stored one
+  row per report. A policy that embeds something ever-changing into the
+  blocked URI in a way `stripQuery()` doesn't catch could still fill that
+  cap with distinct-looking rows for what's really one problem.
 
 ## Recent changes
 
+- **Tier 3: remediation guidance, client-side secret scanning, CSP
+  violation ingestion.**
+  - Every scanner finding that was missing a "how to fix" now has one -
+    exposed files/paths, mixed content, missing SRI, exposed source
+    maps, long-lived session cookies, permissive CORS, TRACE enabled,
+    open GraphQL introspection, and missing HTTPS/HTTP-redirect all get
+    a concrete fix now, not just a description of the problem. Findings
+    that aren't a hosting-header fix (build config, app logic) get a new
+    "Fix" tab in the UI instead of being mislabeled under a platform name
+    that wouldn't actually apply (`scanner.js`, `SecurityScanPanel.jsx`,
+    `MonitorDetail.jsx`'s report generator).
+  - New `auditSecrets()` in `scanner.js` checks a monitor's first-party
+    shipped JavaScript against about a dozen well-known live-key formats
+    (AWS, Stripe, GitHub, Slack, SendGrid, Square, private-key blocks).
+    Any hit is masked before it's ever stored or displayed. Passive only
+    - it reads the same files a browser already downloads, same as the
+    existing source-map audit; it never sends a crafted request or tries
+    a found credential against anything. Runs last in the scan so it
+    only spends whatever request budget the more established checks
+    didn't need, rather than crowding them out.
+  - New CSP violation ingestion: `POST /api/public/monitors/:token/
+    csp-report` accepts both the older `report-uri` format and the
+    newer Reporting API's `report-to` format, dedupes by violation shape
+    with a running count and last-seen time (one row per distinct
+    problem, not one per report), and is capped per monitor so a noisy
+    policy can't grow the table without bound. `index.js`'s JSON body
+    parser now also accepts `application/csp-report` and
+    `application/reports+json` content-types for `/api/public` - the
+    default parser only reads `application/json` and would have silently
+    dropped these. New `GET /:id/csp-violations` (read-only, same
+    org-member access as every other GET) and `DELETE
+    /:id/csp-violations` (mutation-gated, same as deleting the monitor
+    itself) in `monitors.js`. Frontend: new `CspViolations.jsx` panel
+    rendered under the security timeline, and a new "CSP violation
+    reports" section under Share link showing the exact URL/header
+    snippet to point a monitored site's policy at.
+  - Item 12 from the original Tier 3 scope (scheduled authenticated
+    deep-scans) is deliberately not included here - see Known
+    limitations for why.
 - **Uptime/synthetic checks now send a real browser-shaped User-Agent,
   Accept, and Accept-Language.** Root cause of false downtime alerts
   that only ever hit frontend-hosted sites: Node's built-in `fetch`
@@ -167,9 +228,8 @@ default, not a broken one.
   This isn't a guaranteed fix against every WAF (a JS-challenge that
   needs an actual browser engine to solve is out of reach without the
   synthetic engine becoming an actual headless browser, a deliberate
-  weight trade-off - see "Recent changes" further down), but it
-  resolves the ordinary header-based bot filtering that's the far more
-  common case.
+  weight trade-off - see "Known limitations"), but it resolves the
+  ordinary header-based bot filtering that's the far more common case.
 
 - **The dashboard's "Snooze all monitors" panel no longer shows up when
   it would be a guaranteed no-op.** `snoozeAllMonitors`/

@@ -21,6 +21,7 @@ const PLATFORMS = [
   { key: "vercel", label: "Vercel" },
   { key: "netlify", label: "Netlify" },
   { key: "cloudflare", label: "Cloudflare" },
+  { key: "general", label: "Fix" },
 ];
 
 function gradeColor(grade) {

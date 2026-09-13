@@ -20,7 +20,7 @@
 //    soft-404 baseline plus a content signature, so it takes an actual
 //    .env-shaped response to fail the .env check.
 
-import { SEVERITY, scoreFindings, gradeFor, sortFindings, summarize } from "./severity.js";
+import { SEVERITY, scoreFindings, gradeFor, sortFindings, summarize, severityRank } from "./severity.js";
 
 // Hard ceiling on requests per scan. A scan runs unattended on a daily
 // sweep across every monitor, on a free-tier box, against sites the user
@@ -115,6 +115,29 @@ function remediationFor(header, value) {
     netlify: `# _headers\n/*\n  ${header}: ${value}`,
     cloudflare: `Rules -> Transform Rules -> Modify Response Header -> set ${header} to: ${value}`,
   };
+}
+
+// A block-at-the-edge rule for a path that should never be served at
+// all. This is a safety net, not the actual fix - the real fix is not
+// shipping the file in the deployed output in the first place - but a
+// WAF/proxy rule is the one piece of that a report can hand someone as
+// a literal copy-paste action right now.
+function pathRemediation(path) {
+  return {
+    nginx: `location = ${path} { deny all; return 404; }`,
+    express: `app.use(${JSON.stringify(path)}, (req, res) => res.status(404).end());`,
+    vercel: `// vercel.json\n{ "rewrites": [{ "source": "${path}", "destination": "/404" }] }`,
+    netlify: `# _redirects\n${path}  /404  404`,
+    cloudflare: `WAF -> Custom rules -> block requests where URI Path equals "${path}"`,
+  };
+}
+
+// For fixes that live in application logic or build config rather than
+// in a host's header/routing layer - a single platform-agnostic
+// instruction, shown under its own "Fix" tab instead of a hosting
+// platform name that wouldn't actually apply.
+function generalRemediation(text) {
+  return { general: text };
 }
 
 // ---------------------------------------------------------------------
@@ -368,7 +391,10 @@ function auditCookies(response, isHttps) {
         false,
         `${longLived.map((c) => c.name).join(", ")} look like session cookies with a Max-Age over 90 days. A stolen cookie stays valid for that whole window.`,
         SEVERITY.LOW,
-        "cookies"
+        "cookies",
+        generalRemediation(
+          `Shorten Max-Age/Expires on the cookie(s) named above to something measured in hours to a couple of weeks, depending on how sensitive the session is, and use a refresh-token/rotation flow for anything that needs to stay signed in longer than that rather than one long-lived cookie.`
+        )
       )
     );
   }
@@ -471,7 +497,12 @@ export function analyzeHtml(html, finalUrl) {
         ? "Every subresource loads over HTTPS."
         : `${insecure.length} subresource${insecure.length === 1 ? "" : "s"} load over plain HTTP (${insecure.slice(0, 3).join(", ")}${insecure.length > 3 ? ", ..." : ""}). Browsers block these, so this is usually a visibly broken page as well as an interception risk.`,
       SEVERITY.HIGH,
-      "supply-chain"
+      "supply-chain",
+      insecure.length === 0
+        ? null
+        : generalRemediation(
+            `Change each listed URL from http:// to https://, or to a protocol-relative/root-relative path so it always follows the page's own scheme. If a third-party asset genuinely has no HTTPS version, it needs to be dropped or replaced.`
+          )
     )
   );
 
@@ -484,7 +515,12 @@ export function analyzeHtml(html, finalUrl) {
           ? "Every third-party script tag carries a Subresource Integrity hash."
           : `${missingSri.length} third-party script${missingSri.length === 1 ? "" : "s"} load with no integrity attribute. If one of those origins is compromised, whatever it serves next runs with full access to this page. SRI can't be used with scripts that are meant to change (tag managers, analytics loaders), so this is a judgment call rather than an automatic fix.`,
         SEVERITY.MEDIUM,
-        "supply-chain"
+        "supply-chain",
+        missingSri.length === 0
+          ? null
+          : generalRemediation(
+              `Add integrity="sha384-..." and crossorigin="anonymous" to each script tag listed. Most CDNs (jsDelivr, cdnjs, unpkg) publish the exact hash right next to the script URL on their own site. Skip this for scripts that are meant to change on their own (tag managers, analytics loaders) - a hash mismatch would just break them.`
+            )
       )
     );
     findings.push(
@@ -506,7 +542,10 @@ export function analyzeHtml(html, finalUrl) {
         false,
         `The generator meta tag names an exact version: "${generator}".`,
         SEVERITY.LOW,
-        "disclosure"
+        "disclosure",
+        generalRemediation(
+          `Remove or blank the <meta name="generator"> tag your framework/CMS injects automatically. Most (WordPress, various static site generators) have a documented setting to disable it, or it can be stripped in a build/post-processing step.`
+        )
       )
     );
   }
@@ -730,7 +769,20 @@ async function probePaths(origin, budget, baseline, definitions) {
       const present = response.status === 200 && typeAllows && def.signature(body || "") && !looksLikeBaseline(body, response, baseline);
 
       if (def.inverted) {
-        findings.push(finding(def.check, present, present ? `${def.path} is published. ${def.detail}` : `No ${def.path} found. ${def.detail}`, def.severity, "exposure"));
+        findings.push(
+          finding(
+            def.check,
+            present,
+            present ? `${def.path} is published. ${def.detail}` : `No ${def.path} found. ${def.detail}`,
+            def.severity,
+            "exposure",
+            present
+              ? null
+              : generalRemediation(
+                  `Publish a ${def.path} with at least a Contact: field (an email or URL to report a vulnerability to) - a static text file at that path is the entire fix. See securitytxt.org for the format.`
+                )
+          )
+        );
         continue;
       }
 
@@ -744,7 +796,8 @@ async function probePaths(origin, budget, baseline, definitions) {
               ? `${def.path} returns the site's catch-all page rather than a real file, so it isn't exposed.`
               : `${def.path} is not exposed (HTTP ${response.status}).`,
           def.severity,
-          "exposure"
+          "exposure",
+          present ? pathRemediation(def.path) : null
         )
       );
     }
@@ -813,10 +866,120 @@ async function auditSourceMaps(firstPartyScripts, budget) {
         ? `Checked ${candidates.length} first-party script${candidates.length === 1 ? "" : "s"} for a matching .map file - none found.`
         : `${exposed.length} source map${exposed.length === 1 ? "" : "s"} publicly readable, including ${exposed.slice(0, 2).join(", ")}${exposed.length > 2 ? ", ..." : ""}. These reconstruct close to the original, unminified source - variable names, file structure, and any comments left in. Most build tools (Vite, webpack, CRA) can be told not to emit maps in production, or to emit them without uploading to the public build output.`,
       SEVERITY.MEDIUM,
-      "disclosure"
+      "disclosure",
+      exposed.length === 0
+        ? null
+        : generalRemediation(
+            `Stop shipping source maps in the production build, or generate them for your own error-tracker upload without serving them publicly. Vite: build.sourcemap: false (or "hidden" to still generate without a //# sourceMappingURL comment). webpack: devtool: false, or "hidden-source-map" paired with uploading the map to your error tracker only. Next.js: productionBrowserSourceMaps: false (already the default).`
+          )
     )
   );
   return findings;
+}
+
+// ---------------------------------------------------------------------
+// Exposed secrets in shipped JS
+// ---------------------------------------------------------------------
+
+// Well-known, publicly documented key-format prefixes - the same kind
+// of public pattern list gitleaks/truffleHog ship, not anything
+// discovered by probing. Deliberately excludes formats a vendor itself
+// documents as safe to expose client-side (Stripe's pk_ publishable
+// keys, a domain-restricted Google Maps key) - flagging those would be
+// noise, not signal. Only formats the vendor treats as a real secret
+// are listed.
+const SECRET_PATTERNS = [
+  { name: "AWS access key ID", regex: /\bAKIA[0-9A-Z]{16}\b/g, severity: SEVERITY.CRITICAL },
+  { name: "Stripe live secret key", regex: /\bsk_live_[0-9a-zA-Z]{20,}\b/g, severity: SEVERITY.CRITICAL },
+  { name: "Stripe restricted key", regex: /\brk_live_[0-9a-zA-Z]{20,}\b/g, severity: SEVERITY.CRITICAL },
+  { name: "Google OAuth client secret", regex: /\bGOCSPX-[0-9A-Za-z_-]{20,}\b/g, severity: SEVERITY.CRITICAL },
+  { name: "Slack token", regex: /\bxox[baprs]-[0-9A-Za-z-]{10,48}\b/g, severity: SEVERITY.CRITICAL },
+  { name: "GitHub token", regex: /\bgh[pousr]_[0-9A-Za-z]{36,}\b/g, severity: SEVERITY.CRITICAL },
+  { name: "SendGrid API key", regex: /\bSG\.[0-9A-Za-z_-]{20,}\.[0-9A-Za-z_-]{20,}\b/g, severity: SEVERITY.HIGH },
+  { name: "Mailgun API key", regex: /\bkey-[0-9a-f]{32}\b/g, severity: SEVERITY.HIGH },
+  { name: "Square access token", regex: /\bsq0atp-[0-9A-Za-z_-]{20,}\b/g, severity: SEVERITY.HIGH },
+  { name: "Private key block", regex: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g, severity: SEVERITY.CRITICAL },
+];
+
+// Masks a matched secret for display - enough characters to identify
+// which credential it is (so it can actually be found and rotated),
+// nowhere near enough to reconstruct it from a report or a screenshot.
+function maskSecret(value) {
+  if (value.length <= 10) return "*".repeat(value.length);
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function scanForSecrets(text, source, seen) {
+  const hits = [];
+  for (const pattern of SECRET_PATTERNS) {
+    pattern.regex.lastIndex = 0;
+    let match;
+    while ((match = pattern.regex.exec(text))) {
+      // Same key committed to more than one bundle (a shared chunk, a
+      // vendor file included twice) should count once, not once per file.
+      const dedupeKey = `${pattern.name}:${match[0]}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      hits.push({ name: pattern.name, severity: pattern.severity, masked: maskSecret(match[0]), source });
+    }
+  }
+  return hits;
+}
+
+// Passive by construction: this only reads the JS a browser already
+// downloads to render the page, the same files auditSourceMaps() above
+// fetches for the same reason. Nothing here sends a crafted request,
+// authenticates as anyone, or tries a found credential against
+// anything - it stops at "this looks like a live key and it's sitting
+// in a public file," which is a fact anyone loading the page already
+// has access to, not a probe of the site's own defenses.
+async function auditSecrets(firstPartyScripts, budget) {
+  const candidates = firstPartyScripts.slice(0, 6);
+  if (candidates.length === 0) return [];
+
+  const seen = new Set();
+  const found = [];
+  let budgetExhausted = false;
+
+  await Promise.all(
+    candidates.map(async (src) => {
+      const result = await safeFetch(src, budget, { redirect: "follow", readBody: true });
+      if (!result) {
+        budgetExhausted = true;
+        return;
+      }
+      if (result.error || !result.body) return;
+      found.push(...scanForSecrets(result.body, src, seen));
+    })
+  );
+
+  if (found.length === 0) {
+    return [
+      finding(
+        "No exposed API keys/secrets in shipped JS",
+        true,
+        budgetExhausted
+          ? "Not fully checked - the scan's request budget was reached."
+          : `Checked ${candidates.length} first-party script${candidates.length === 1 ? "" : "s"} against known key formats (AWS, Stripe, GitHub, Slack, SendGrid, and others) - none found. This can't rule out formats the list doesn't cover, or a key assembled at runtime rather than sitting in the file as a literal string.`,
+        SEVERITY.INFO,
+        "supply-chain"
+      ),
+    ];
+  }
+
+  const worst = found.reduce((acc, f) => (severityRank(f.severity) < severityRank(acc.severity) ? f : acc));
+  return [
+    finding(
+      "No exposed API keys/secrets in shipped JS",
+      false,
+      `${found.length} likely secret${found.length === 1 ? "" : "s"} found in shipped JavaScript: ${found.map((f) => `${f.name} (${f.masked})`).join(", ")}. Anything sent to the browser is public - these are not safe to ship client-side.`,
+      worst.severity,
+      "supply-chain",
+      generalRemediation(
+        `Rotate every key listed above now - it's already public, so rotation is the actual fix, not just removing it going forward. Move the real credential into a server-side environment variable and proxy whatever needs it through your own backend instead of calling the provider directly from the browser. If the provider offers a publishable or domain/scope-restricted key meant for client-side use (Stripe's pk_, a referrer-restricted Google API key), use that instead of the full secret.`
+      )
+    ),
+  ];
 }
 
 // ---------------------------------------------------------------------
@@ -881,7 +1044,10 @@ async function probeApiSurface(url, origin, budget) {
           false,
           `The server reflected an arbitrary Origin back in Access-Control-Allow-Origin and set Access-Control-Allow-Credentials: true${disagreement}. Any website a logged-in user visits can read authenticated responses from this endpoint. This is usually a reflect-the-origin CORS config that was only ever meant to say "allow my own frontend".`,
           SEVERITY.CRITICAL,
-          "api"
+          "api",
+          generalRemediation(
+            `Replace the reflect-any-origin logic with an explicit allowlist of the origin(s) that should actually be allowed, and only set Access-Control-Allow-Credentials: true for those. Express (cors package): cors({ origin: ["https://yourapp.com"], credentials: true }) instead of origin: true or a function that echoes req.headers.origin unconditionally.`
+          )
         )
       );
     } else if (worst.reflects) {
@@ -891,7 +1057,10 @@ async function probeApiSurface(url, origin, budget) {
           false,
           `The server reflects any Origin it's given back in Access-Control-Allow-Origin${disagreement}. Much less serious without credentials allowed, but it means the allowlist isn't actually an allowlist.`,
           SEVERITY.MEDIUM,
-          "api"
+          "api",
+          generalRemediation(
+            `Replace the reflect-any-origin logic with an explicit allowlist of the origin(s) that should actually be allowed. Express (cors package): cors({ origin: ["https://yourapp.com"] }) instead of origin: true or a function that echoes req.headers.origin unconditionally.`
+          )
         )
       );
     } else if (worst.wildcard && worst.allowCredentials) {
@@ -901,7 +1070,10 @@ async function probeApiSurface(url, origin, budget) {
           false,
           `Access-Control-Allow-Origin is * alongside Allow-Credentials: true${disagreement}. Browsers reject that combination outright, so this is likely breaking your own frontend as well.`,
           SEVERITY.MEDIUM,
-          "api"
+          "api",
+          generalRemediation(
+            `Replace the wildcard with an explicit allowlist of the origin(s) that need credentialed access - a wildcard can't legally be paired with Allow-Credentials: true anyway, so this is very likely already broken for whatever it was meant to serve. Express (cors package): cors({ origin: ["https://yourapp.com"], credentials: true }).`
+          )
         )
       );
     } else {
@@ -930,7 +1102,12 @@ async function probeApiSurface(url, origin, budget) {
           ? "The server answers TRACE requests, which echo the request back including its headers. There's no reason to leave this enabled."
           : `TRACE is rejected (HTTP ${trace.response.status}).`,
         SEVERITY.LOW,
-        "api"
+        "api",
+        enabled
+          ? generalRemediation(
+              `Disable the TRACE method wherever the request is being terminated. nginx: add a rule returning 405 for $request_method = TRACE. Most Node frameworks don't implement TRACE themselves, so if it's answering, it's most likely happening at a reverse proxy/load balancer in front of the app - check there first.`
+            )
+          : null
       )
     );
   }
@@ -966,7 +1143,10 @@ async function probeApiSurface(url, origin, budget) {
         false,
         "The /graphql endpoint answers introspection queries, which hands over the complete schema: every type, field and mutation, including ones no client is meant to call.",
         SEVERITY.MEDIUM,
-        "api"
+        "api",
+        generalRemediation(
+          `Disable introspection in production. Apollo Server: introspection: false (or gate it behind NODE_ENV !== "production"). graphql-yoga / envelop: the disableIntrospection plugin. Keep it enabled in dev/staging where it's genuinely useful.`
+        )
       )
     );
   }
@@ -1008,7 +1188,12 @@ export async function scanSite(url, options = {}) {
         ? "The site loads over HTTPS."
         : "The site does not serve over HTTPS. Everything sent to or from it, credentials and session cookies included, travels in plain text.",
       SEVERITY.CRITICAL,
-      "transport"
+      "transport",
+      isHttps
+        ? null
+        : generalRemediation(
+            `Put the site behind TLS. Every major host (Vercel, Netlify, Render, Cloudflare) issues and renews a free certificate automatically once a domain points at them; on self-managed infrastructure, Let's Encrypt via certbot is the free equivalent.`
+          )
     )
   );
 
@@ -1028,7 +1213,12 @@ export async function scanSite(url, options = {}) {
             ? `Plain HTTP returns ${plain.response.status} to the HTTPS version.`
             : `Plain HTTP returned ${plain.response.status} instead of redirecting to HTTPS, so the unencrypted version of the site is still being served.`,
           SEVERITY.HIGH,
-          "transport"
+          "transport",
+          redirects
+            ? null
+            : generalRemediation(
+                `Add a redirect from plain HTTP to the HTTPS version at whatever's terminating TLS. Most hosts with a "Force HTTPS" toggle (Vercel, Netlify, Cloudflare) already do this once it's turned on; self-managed nginx needs a "return 301 https://$host$request_uri;" server block on port 80.`
+              )
         )
       );
     }
@@ -1052,6 +1242,13 @@ export async function scanSite(url, options = {}) {
   findings.push(...(await probePaths(origin, budget, baseline, EXPOSED_PATHS)));
   findings.push(...(await probePaths(origin, budget, baseline, API_SURFACE_PATHS)));
   findings.push(...(await probeApiSurface(finalUrl, origin, budget)));
+  // Runs last and deliberately gets whatever request budget is left
+  // rather than a reserved slice of it - the checks above (exposed
+  // files, header posture) are more established and more certain, so
+  // they're never the ones that get squeezed on a script-heavy site.
+  // auditSecrets already degrades to an honest "not fully checked"
+  // rather than a false pass when it runs out of room.
+  findings.push(...(await auditSecrets(firstPartyScripts, budget)));
 
   const sorted = sortFindings(findings);
   const score = scoreFindings(sorted);

@@ -246,3 +246,117 @@ router.get("/monitors/:token/badge.svg", async (req, res) => {
 });
 
 export default router;
+
+// ---------------------------------------------------------------------
+// CSP violation reports
+// ---------------------------------------------------------------------
+
+// Per-monitor ceiling on distinct violation shapes stored, so a policy
+// that's misconfigured to embed something ever-changing (a cache-busting
+// query string, a random inline hash) into what would otherwise be the
+// same violation can't grow this table without bound. stripQuery()
+// below handles the common case of that directly; this is the backstop
+// for whatever it doesn't catch.
+const MAX_CSP_ROWS_PER_MONITOR = 300;
+
+function stripQuery(url) {
+  if (typeof url !== "string") return url ?? null;
+  try {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    // Not a full URL - CSP keywords like "inline", "eval", "self" pass
+    // through unchanged rather than being dropped.
+    return url;
+  }
+}
+
+// Normalizes both shapes a browser can send: the older report-uri
+// format ({"csp-report": {...}}, hyphenated keys) and the newer
+// Reporting API's report-to format (an array of {type, body: {...}},
+// camelCase keys). Anything that matches neither shape yields no
+// reports rather than a guess.
+function normalizeCspReports(payload) {
+  if (Array.isArray(payload)) {
+    return payload
+      .filter((entry) => entry && entry.type === "csp-violation" && entry.body)
+      .map((entry) => {
+        const body = entry.body;
+        return {
+          documentUri: stripQuery(body.documentURL),
+          violatedDirective: body.effectiveDirective || body.violatedDirective || null,
+          blockedUri: stripQuery(body.blockedURL),
+          sourceFile: stripQuery(body.sourceFile),
+          lineNumber: Number.isFinite(body.lineNumber) ? body.lineNumber : null,
+          disposition: body.disposition || null,
+        };
+      });
+  }
+  const report = payload && payload["csp-report"];
+  if (!report) return [];
+  return [
+    {
+      documentUri: stripQuery(report["document-uri"]),
+      violatedDirective: report["effective-directive"] || report["violated-directive"] || null,
+      blockedUri: stripQuery(report["blocked-uri"]),
+      sourceFile: stripQuery(report["source-file"]),
+      lineNumber: Number.isFinite(report["line-number"]) ? report["line-number"] : null,
+      disposition: report["disposition"] || null,
+    },
+  ];
+}
+
+// A monitored site's own CSP points its report-uri/report-to at this
+// URL, so its browser visitors' real, actually-hit violations land here
+// instead of Pulse only being able to infer risk from the policy's text
+// (see scanner.js's header grading). No auth beyond the unguessable
+// share_token - a browser sending a real violation report has no way to
+// authenticate as anything else, so this is necessarily as open as
+// report-uri/report-to endpoints always are. Responds 204 immediately,
+// before any DB work: the Reporting API doesn't read the response body
+// or react to a slow one, and there's no one at the other end who
+// benefits from waiting.
+router.post("/monitors/:token/csp-report", async (req, res) => {
+  res.status(204).end();
+
+  try {
+    const monitor = await findByToken(req.params.token);
+    if (!monitor) return;
+
+    for (const r of normalizeCspReports(req.body)) {
+      if (!r.violatedDirective && !r.blockedUri) continue;
+
+      const updated = await pool.query(
+        `UPDATE csp_violations
+         SET count = count + 1, last_seen_at = now()
+         WHERE monitor_id = $1
+           AND violated_directive IS NOT DISTINCT FROM $2
+           AND blocked_uri IS NOT DISTINCT FROM $3
+           AND source_file IS NOT DISTINCT FROM $4
+         RETURNING id`,
+        [monitor.id, r.violatedDirective, r.blockedUri, r.sourceFile]
+      );
+      if (updated.rows.length > 0) continue;
+
+      // Only a genuinely new violation shape reaches here, so this extra
+      // query runs on the rare path, not on every repeat report.
+      const { rows: countRows } = await pool.query(`SELECT COUNT(*) FROM csp_violations WHERE monitor_id = $1`, [monitor.id]);
+      if (Number(countRows[0].count) >= MAX_CSP_ROWS_PER_MONITOR) continue;
+
+      await pool.query(
+        `INSERT INTO csp_violations (monitor_id, document_uri, violated_directive, blocked_uri, source_file, line_number, disposition)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (monitor_id, violated_directive, blocked_uri, source_file)
+         DO UPDATE SET count = csp_violations.count + 1, last_seen_at = now()`,
+        [monitor.id, r.documentUri, r.violatedDirective, r.blockedUri, r.sourceFile, r.lineNumber, r.disposition]
+      );
+    }
+  } catch (err) {
+    // Already responded 204 - a malformed or hostile report body should
+    // never surface as a 500 to whatever sent it, and there's no client
+    // here to retry anyway.
+    console.error("csp-report ingestion failed:", err.message);
+  }
+});
