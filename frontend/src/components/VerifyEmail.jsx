@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { verifyEmail } from "../api.js";
 
 // Rendered from main.jsx in place of the whole app when the URL is a
@@ -7,6 +7,17 @@ import { verifyEmail } from "../api.js";
 // mounts, just for the opposite direction: this one is *establishing* a
 // session rather than deliberately avoiding one.
 //
+// Deliberately does NOT call verifyEmail() the moment this mounts. A
+// link that consumes itself just by being loaded is a well-known trap
+// for exactly this kind of one-time-token flow: Gmail and plenty of
+// other mail clients (and some phones' link-preview features) fetch a
+// link's destination automatically to scan or preview it, before a
+// person ever taps it themselves - if that fetch runs this component's
+// side effect, it silently burns the token, and the actual human who
+// clicks the link next gets a confusing "invalid or already used"
+// error for a link they never got to use. Requiring an explicit button
+// tap means only a real person looking at a real screen can consume it.
+//
 // On success, this doesn't try to hand a user object to App via props -
 // there's no clean way to do that from outside App's own tree. Instead
 // it clears the URL back to plain "/" and reloads: the confirmation
@@ -14,25 +25,21 @@ import { verifyEmail } from "../api.js";
 // getMe() on that fresh mount picks it up and shows the authed app
 // directly, the same as a normal login would have.
 export default function VerifyEmail({ token }) {
-  const [status, setStatus] = useState("verifying"); // verifying | error
+  const [status, setStatus] = useState("ready"); // ready | verifying | error
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    let ignore = false;
+  function handleConfirm() {
+    setStatus("verifying");
+    setError(null);
     verifyEmail(token)
       .then(() => {
-        if (ignore) return;
         window.location.href = window.location.pathname;
       })
       .catch((err) => {
-        if (ignore) return;
         setError(err.message);
         setStatus("error");
       });
-    return () => {
-      ignore = true;
-    };
-  }, [token]);
+  }
 
   return (
     <div className="pl-auth">
@@ -44,14 +51,19 @@ export default function VerifyEmail({ token }) {
           </svg>
           Pulse
         </div>
-        {status === "verifying" ? (
-          <div className="pl-auth__tagline">Confirming your account...</div>
-        ) : (
+        {status === "error" ? (
           <>
             <div className="pl-error">{error}</div>
             <a className="pl-btn" href={window.location.pathname} style={{ width: "100%", textAlign: "center", display: "block", textDecoration: "none", boxSizing: "border-box" }}>
               Back to sign up
             </a>
+          </>
+        ) : (
+          <>
+            <div className="pl-auth__tagline">Tap below to finish creating your account.</div>
+            <button className="pl-btn" type="button" style={{ width: "100%" }} onClick={handleConfirm} disabled={status === "verifying"}>
+              {status === "verifying" ? "Confirming..." : "Confirm my account"}
+            </button>
           </>
         )}
       </div>

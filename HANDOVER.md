@@ -206,6 +206,20 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Verification link no longer auto-confirms on page load - requires an
+  explicit "Confirm my account" tap.** `VerifyEmail.jsx` was calling
+  `verifyEmail(token)` the moment it mounted, with no user interaction
+  at all. That's a real trap for a one-time-token flow: Gmail and other
+  mail clients (and some phones' link-preview features) fetch a link's
+  destination automatically to scan or preview it before a person ever
+  taps it - if that automatic fetch runs this component's side effect,
+  it silently consumes the token, and the actual human who clicks the
+  link next gets a confusing "invalid or already used" error for a link
+  they never got to use themselves. This matches what was reported: a
+  confirmation email arrived, but opening the link errored out. Now the
+  page just shows a button; only tapping it calls the endpoint, so only
+  a real person looking at a real screen can consume the token.
+
 - **Email-verified signup, closing the last of the three security-audit
   trade-offs from before.**
   - New `pending_signups` table (`db.js`): a signup attempt that hasn't
