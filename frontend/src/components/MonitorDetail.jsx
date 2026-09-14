@@ -53,8 +53,11 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
   const [ctRefreshing, setCtRefreshing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
+  const [snoozingMinutes, setSnoozingMinutes] = useState(null);
   const [shareBusy, setShareBusy] = useState(false);
+  const [shareAction, setShareAction] = useState(null);
   // Fetched whenever this monitor belongs to an org - originally just
   // for the report branding below, now also the source of the current
   // viewer's role there (see canManage just below), since GET
@@ -161,14 +164,21 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
   }, [monitor.id]);
 
   async function handleDelete() {
-    await deleteMonitor(monitor.id);
-    toast("Monitor deleted.");
-    onChanged();
-    onBack();
+    setDeleting(true);
+    try {
+      await deleteMonitor(monitor.id);
+      toast("Monitor deleted.");
+      onChanged();
+      onBack();
+    } catch (err) {
+      setDeleting(false);
+      toast(err.message, "error");
+    }
   }
 
   async function handleSnooze(minutes) {
     setSnoozing(true);
+    setSnoozingMinutes(minutes);
     try {
       await snoozeMonitor(monitor.id, minutes);
       toast(`Snoozed for ${minutes < 60 ? `${minutes}m` : `${minutes / 60}h`}.`);
@@ -177,6 +187,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
       toast(err.message, "error");
     } finally {
       setSnoozing(false);
+      setSnoozingMinutes(null);
     }
   }
 
@@ -296,6 +307,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
 
   async function handleRegenerateShare() {
     setShareBusy(true);
+    setShareAction("regenerate");
     try {
       await regenerateMonitorShare(monitor.id);
       toast("New link generated - the old one no longer works.");
@@ -304,11 +316,13 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
       toast(err.message, "error");
     } finally {
       setShareBusy(false);
+      setShareAction(null);
     }
   }
 
   async function handleRevokeShare() {
     setShareBusy(true);
+    setShareAction("revoke");
     try {
       await revokeMonitorShare(monitor.id);
       toast("Share link revoked.");
@@ -317,6 +331,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
       toast(err.message, "error");
     } finally {
       setShareBusy(false);
+      setShareAction(null);
     }
   }
 
@@ -473,7 +488,9 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
             <span style={{ fontSize: 13, color: "var(--ink-dim)" }}>
               Snoozed until {formatDateTime(monitor.snoozed_until)}, checks are paused.
             </span>
-            <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleUnsnooze} disabled={snoozing}>Unsnooze</button>
+            <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleUnsnooze} disabled={snoozing}>
+              {snoozing ? "Unsnoozing..." : "Unsnooze"}
+            </button>
           </>
         ) : (
           <>
@@ -481,7 +498,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
             <div style={{ display: "flex", gap: 6 }}>
               {SNOOZE_OPTIONS.map((opt) => (
                 <button key={opt.minutes} className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleSnooze(opt.minutes)} disabled={snoozing}>
-                  {opt.label}
+                  {snoozing && snoozingMinutes === opt.minutes ? "Snoozing..." : opt.label}
                 </button>
               ))}
             </div>
@@ -623,8 +640,12 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
             </div>
             {canManage && (
               <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleRegenerateShare} disabled={shareBusy}>Regenerate</button>
-                <button type="button" className="pl-btn pl-btn--danger pl-btn--sm" onClick={handleRevokeShare} disabled={shareBusy}>Revoke</button>
+                <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleRegenerateShare} disabled={shareBusy}>
+                  {shareAction === "regenerate" ? "Regenerating..." : "Regenerate"}
+                </button>
+                <button type="button" className="pl-btn pl-btn--danger pl-btn--sm" onClick={handleRevokeShare} disabled={shareBusy}>
+                  {shareAction === "revoke" ? "Revoking..." : "Revoke"}
+                </button>
               </div>
             )}
 
@@ -704,8 +725,9 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
         <ConfirmDialog
           title="Delete this monitor?"
           body={`${monitor.name} and its full check history will be removed. This can't be undone.`}
-          confirmLabel="Delete"
+          confirmLabel={deleting ? "Deleting..." : "Delete"}
           danger
+          busy={deleting}
           onConfirm={handleDelete}
           onCancel={() => setConfirmingDelete(false)}
         />

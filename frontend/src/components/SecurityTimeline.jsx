@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { SEVERITY_STYLE } from "./SecurityScanPanel.jsx";
 
 // Human labels for each detector's event kind. Kept as a lookup rather
@@ -31,7 +32,17 @@ function relativeTime(iso) {
 }
 
 export default function SecurityTimeline({ events, onAcknowledge, canManage = true }) {
+  const [acknowledgingId, setAcknowledgingId] = useState(null);
   if (!events) return null;
+
+  async function handleAcknowledge(eventId) {
+    setAcknowledgingId(eventId);
+    try {
+      await onAcknowledge(eventId);
+    } finally {
+      setAcknowledgingId(null);
+    }
+  }
 
   const open = events.filter((event) => !event.acknowledged);
 
@@ -79,9 +90,10 @@ export default function SecurityTimeline({ events, onAcknowledge, canManage = tr
                     type="button"
                     className="pl-btn pl-btn--ghost"
                     style={{ fontSize: 10.5, padding: "2px 8px", flexShrink: 0 }}
-                    onClick={() => onAcknowledge(event.id)}
+                    onClick={() => handleAcknowledge(event.id)}
+                    disabled={acknowledgingId === event.id}
                   >
-                    Acknowledge
+                    {acknowledgingId === event.id ? "Acknowledging..." : "Acknowledge"}
                   </button>
                 )}
               </div>

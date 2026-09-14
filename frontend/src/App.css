@@ -1393,3 +1393,27 @@ a {
     display: none;
   }
 }
+
+/* Logout transition overlay (LogoutTransition.jsx). Same positioning/
+   background as index.html's #pl-splash - deliberately kept as a
+   class here rather than trying to share that ID, since #pl-splash is
+   tied to one specific static element that main.jsx removes from the
+   DOM entirely after first load. The inner glow/icon/path classes are
+   NOT redefined here - they're reused directly from index.html's
+   inline <style>, which is global and already loaded by the time this
+   could ever render (deep in the authenticated app, logging out). */
+.pl-logout-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: radial-gradient(ellipse at center, #10201a 0%, #0a0f0d 65%);
+  transition: opacity 0.4s ease;
+}
+.pl-logout-transition--hidden {
+  opacity: 0;
+  pointer-events: none;
+}

@@ -74,6 +74,7 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
   const [savingBrand, setSavingBrand] = useState(false);
   const [logoBusy, setLogoBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deletingOrg, setDeletingOrg] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
 
   const canManage = myRole === "owner" || myRole === "admin";
@@ -124,13 +125,18 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
     }
   }
 
+  const [removingId, setRemovingId] = useState(null);
+
   async function handleRemove(memberId) {
+    setRemovingId(memberId);
     try {
       await removeOrgMember(orgId, memberId);
       toast("Removed.");
       await load();
     } catch (err) {
       toast(err.message, "error");
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -169,11 +175,13 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
   }
 
   async function handleDelete() {
+    setDeletingOrg(true);
     try {
       await deleteOrganization(orgId);
       toast("Organization deleted. Its monitors and status pages are now personal again.");
       onChanged();
     } catch (err) {
+      setDeletingOrg(false);
       toast(err.message, "error");
     }
   }
@@ -206,8 +214,8 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
                   <span style={{ color: "var(--ink-dim)", fontSize: 12 }}>{ROLE_LABEL[m.role]}</span>
                 )}
                 {canManage && (
-                  <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleRemove(m.id)}>
-                    Remove
+                  <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => handleRemove(m.id)} disabled={removingId === m.id}>
+                    {removingId === m.id ? "Removing..." : "Remove"}
                   </button>
                 )}
               </div>
@@ -217,8 +225,8 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
             <div key={inv.id} style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "var(--ink-dim)" }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inv.invited_email} (invited, not yet joined)</span>
               {canManage && (
-                <button className="pl-btn pl-btn--ghost pl-btn--sm" style={{ alignSelf: "flex-end" }} onClick={() => handleRemove(inv.id)}>
-                  Cancel
+                <button className="pl-btn pl-btn--ghost pl-btn--sm" style={{ alignSelf: "flex-end" }} onClick={() => handleRemove(inv.id)} disabled={removingId === inv.id}>
+                  {removingId === inv.id ? "Canceling..." : "Cancel"}
                 </button>
               )}
             </div>
@@ -325,7 +333,8 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
             <ConfirmDialog
               title="Delete this organization?"
               body="Its monitors and status pages aren't deleted - they become personal to whoever created each one. Membership and the audit log are gone for good."
-              confirmLabel="Delete organization"
+              confirmLabel={deletingOrg ? "Deleting..." : "Delete organization"}
+              busy={deletingOrg}
               onConfirm={handleDelete}
               onCancel={() => setConfirmingDelete(false)}
             />

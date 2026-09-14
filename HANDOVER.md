@@ -206,6 +206,46 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Logout transition, login-lands-on-wrong-tab fix, and pending-state
+  text on buttons that previously gave none.**
+  - **Login after logout landed on Settings instead of the dashboard.**
+    Root cause: `tab`/`selectedId`/`adding` and the loaded monitor/status
+    page lists all live in `App.jsx`, which never unmounts across a
+    logout - only the conditional render swaps to `AuthRoot`. Logging
+    back in just re-showed whatever tab was open before, since nothing
+    ever reset it. `handleLoggedOut` in `App.jsx` now resets all of that
+    (tab back to dashboard, no monitor selected, add-form closed, and the
+    monitor/status-page lists cleared rather than left stale - the latter
+    also matters on a shared device, so a different account logging in
+    right after doesn't briefly see the previous account's list).
+  - **Logout now plays a transition instead of an instant cut.** The Log
+    out button shows "Logging out..." while the request is in flight
+    (`SettingsView.jsx`), then a full-screen animation plays
+    (`LogoutTransition.jsx`) before the sign-in screen appears - reusing
+    the exact same `.pl-splash-glow`/`.pl-splash-icon`/`.pl-splash-path`
+    classes the app's first-load splash uses (those are defined as plain,
+    non-scoped classes in `index.html`'s inline `<style>`, which is
+    global and already loaded by the time anyone could log out, so this
+    replays the identical animation rather than a separately-maintained
+    copy of it). Timing matches the original splash: 1700ms played, then
+    a 400ms fade, both driven from `handleLoggedOut` in `App.jsx` - the
+    logged-out state doesn't actually take effect until the overlay has
+    fully faded, so nothing flashes underneath it.
+  - **Pending-state text added to buttons that gave zero feedback while
+    their action was running:** the shared `ConfirmDialog` component (new
+    `busy` prop, disables both buttons) now shows "Deleting..." across
+    all four places that use it (delete monitor from the detail view,
+    delete monitor from the dashboard list, delete status page, delete
+    organization); Snooze/Unsnooze buttons on a monitor now say
+    "Snoozing.../Unsnoozing..." (per snooze-duration option, not just a
+    blanket disable); org member "Remove" and pending-invite "Cancel" now
+    show "Removing.../Canceling..."; share-link "Regenerate"/"Revoke" now
+    distinguish which one is actually running; the security timeline's
+    "Acknowledge" button now shows "Acknowledging..." per event. Left
+    alone: buttons that already had this (security scan's "Rescan now",
+    DNS/cert "Check now", `MonitorForm`'s "Save") - this pass only
+    touched the ones that had none.
+
 - **Verification link no longer auto-confirms on page load - requires an
   explicit "Confirm my account" tap.** `VerifyEmail.jsx` was calling
   `verifyEmail(token)` the moment it mounted, with no user interaction
@@ -1279,16 +1319,12 @@ default suite.
 
 **More effort, real differentiation:**
 
-- **Remediation guidance per finding.** Each finding has a severity;
-  add a short "how to fix" (exact header value, DNS record to add). Turns
-  a report into a checklist instead of homework.
-- **Client-side secret scanning.** Passively parse served JS bundles for
-  exposed API keys/tokens (regex against known key shapes - Stripe, AWS,
-  Firebase, etc.). Still passive - reading what's already served - so it
-  stays inside the existing scope line.
-- **CSP violation ingestion endpoint.** Let a monitored site point its
-  `report-uri`/`report-to` at Pulse and passively collect real violations
-  instead of only inferring risk from the header value.
+- ~~Remediation guidance per finding~~ - done, see "Tier 3" in Recent
+  changes above.
+- ~~Client-side secret scanning~~ - done (`auditSecrets()` in
+  `scanner.js`), see "Tier 3" above.
+- ~~CSP violation ingestion endpoint~~ - done (`routes/public.js`'s
+  `/csp-report`), see "Tier 3" above.
 - **Scheduled authenticated deep-scans, opt-in per monitor.** Everything
   today is unauthenticated/outside-in by design, which is itself a
   selling point ("safe to point at a client's prod site without asking
@@ -1296,3 +1332,26 @@ default suite.
   business-logic checks - would need its own explicit consent flow, kept
   separate from the default suite so that guarantee never gets
   compromised for existing monitors.
+- **Move a status page between personal/org ownership after creation.**
+  Monitors can do this now (`PATCH /api/monitors/:id` accepts
+  `organization_id`); status pages still can't - the same reassignment
+  logic would extend directly to `PATCH /api/status-pages/:id`. See
+  Known limitations.
+- **`custom_domain` automation.** Currently a stored reminder field on an
+  organization, not functional - typing one in doesn't route anything.
+  Making it real needs a CNAME on the client's end plus host
+  routing/TLS handling on this app's end (likely a per-domain cert via
+  Let's Encrypt, and something to route an incoming request by Host
+  header to the right org's branding). See Known limitations.
+- **Public Suffix List for the registrable-root heuristic.** Both
+  `dnsCheck.js`'s subdomain-takeover check and the domain-expiry lookup
+  take "last two labels" as the registrable root, which is wrong for
+  `example.co.uk`/`example.com.ng`-shaped domains. Fixing it properly
+  means shipping the PSL as a dependency plus a data file that goes
+  stale over time - a deliberate trade so far, not an oversight. See
+  Known limitations.
+- **More subdomain-takeover signatures.** Currently covers the 8
+  platforms whose "nothing is configured here" page is recognizable
+  (GitHub Pages, Heroku, S3, Netlify, Vercel, Shopify, Fastly, Azure). A
+  dangling CNAME to any other platform won't be flagged. See Known
+  limitations.

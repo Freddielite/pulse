@@ -303,7 +303,8 @@ export default function StatusPagesView({ monitors, existingGroups = [], pages, 
         <ConfirmDialog
           title="Delete this status page?"
           body="The link will stop working immediately. This doesn't affect the monitors themselves or their individual share links."
-          confirmLabel="Delete"
+          confirmLabel={busyId === confirmingDeleteId ? "Deleting..." : "Delete"}
+          busy={busyId === confirmingDeleteId}
           onConfirm={() => handleDelete(confirmingDeleteId)}
           onCancel={() => setConfirmingDeleteId(null)}
         />

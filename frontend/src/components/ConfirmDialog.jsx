@@ -9,16 +9,16 @@ import { useBodyScrollLock } from "../hooks/useBodyScrollLock.js";
 // new containing block, which would reposition/clip a fixed overlay
 // relative to that ancestor instead of the actual viewport. A portal
 // sidesteps the whole problem regardless of where this gets used.
-export default function ConfirmDialog({ title, body, confirmLabel = "Confirm", danger, onConfirm, onCancel }) {
+export default function ConfirmDialog({ title, body, confirmLabel = "Confirm", danger, busy = false, onConfirm, onCancel }) {
   useBodyScrollLock(true);
   return createPortal(
-    <div className="pl-overlay" onClick={onCancel}>
+    <div className="pl-overlay" onClick={busy ? undefined : onCancel}>
       <div className="pl-panel pl-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
         <div className="pl-modal__title">{title}</div>
         <div style={{ fontSize: 13.5, color: "var(--ink-dim)" }}>{body}</div>
         <div className="pl-modal__actions">
-          <button className="pl-btn pl-btn--ghost" onClick={onCancel}>Cancel</button>
-          <button className={`pl-btn ${danger ? "pl-btn--danger" : ""}`} onClick={onConfirm}>{confirmLabel}</button>
+          <button className="pl-btn pl-btn--ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className={`pl-btn ${danger ? "pl-btn--danger" : ""}`} onClick={onConfirm} disabled={busy}>{confirmLabel}</button>
         </div>
       </div>
     </div>,

@@ -70,6 +70,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   const [telegramChatId, setTelegramChatId] = useState(user.telegram_chat_id || "");
   const [savingTelegramChatId, setSavingTelegramChatId] = useState(false);
   const [digestBusy, setDigestBusy] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [breachBusy, setBreachBusy] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState(user.webhook_url || "");
   const [savingWebhookUrl, setSavingWebhookUrl] = useState(false);
@@ -310,8 +311,17 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
   }
 
   async function handleLogout() {
-    await logout();
-    onLoggedOut();
+    setLoggingOut(true);
+    try {
+      await logout();
+      // Not reset back to false on success - App.jsx's full-screen
+      // transition takes over the instant onLoggedOut() runs, and this
+      // component is about to be covered by (then unmounted under) it.
+      onLoggedOut();
+    } catch (err) {
+      setLoggingOut(false);
+      toast(err.message, "error");
+    }
   }
 
   async function handleCreateToken(e) {
@@ -688,7 +698,9 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
             <div className="pl-settings-row__title">{user.email}</div>
             <div className="pl-settings-row__desc">Logged in</div>
           </div>
-          <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleLogout}>Log out</button>
+          <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleLogout} disabled={loggingOut}>
+            {loggingOut ? "Logging out..." : "Log out"}
+          </button>
         </div>
       </div>
     </div>

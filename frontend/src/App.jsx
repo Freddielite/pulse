@@ -10,6 +10,7 @@ import MonitorForm from "./components/MonitorForm.jsx";
 import SettingsView from "./components/SettingsView.jsx";
 import StatusPagesView from "./components/StatusPagesView.jsx";
 import InstallPrompt from "./components/InstallPrompt.jsx";
+import LogoutTransition from "./components/LogoutTransition.jsx";
 
 // Bottom tab bar icons, hand-drawn rather than pulling in an icon
 // library for three glyphs. Monitors reuses the app's own pulse-line
@@ -55,6 +56,11 @@ export default function App() {
   // into a monitor's detail, popping back out of it, or switching a
   // top-level tab (which isn't really a "direction" at all).
   const [navAction, setNavAction] = useState("tab");
+  // null when nothing's happening; "playing" then "fading" while the
+  // logout transition (see LogoutTransition.jsx) runs, in that order.
+  // user/tab/etc. don't actually flip to their logged-out values until
+  // this finishes - see handleLogout below.
+  const [logoutPhase, setLogoutPhase] = useState(null);
   const { toasts, push: toast } = useToast();
   const isMobile = useIsMobile();
 
@@ -138,10 +144,45 @@ export default function App() {
     setSelectedId(null);
   }
 
+  // The actual sign-out (API call, button's own "Logging out..." state)
+  // happens in SettingsView - this only runs once that's already
+  // succeeded. Plays the same splash animation the app opens with
+  // (LogoutTransition.jsx reuses its CSS classes directly) as a full-
+  // screen overlay before anything about the logged-in state actually
+  // changes underneath it, then swaps to the signed-out state once the
+  // overlay has faded - so whatever appears once it's gone is already
+  // the clean, logged-out app, not a flash of the old one first.
+  // Durations match main.jsx's own splash timing (1700ms play + the
+  // 400ms opacity transition in index.html's #pl-splash.pl-splash-hidden)
+  // so the two feel like the same animation, not a shorter knockoff.
+  function handleLoggedOut() {
+    if ("clearAppBadge" in navigator) {
+      navigator.clearAppBadge().catch(() => {});
+    }
+    setLogoutPhase("playing");
+    setTimeout(() => setLogoutPhase("fading"), 1700);
+    setTimeout(() => {
+      setUser(null);
+      setTab("dashboard");
+      setSelectedId(null);
+      setAdding(false);
+      // Cleared rather than left stale - the next getMe()/loadMonitors()
+      // cycle (for this account logging back in, or a different one on
+      // a shared device) refetches anyway, but not clearing these would
+      // let whoever's data was here flash on screen for a moment first.
+      setMonitors([]);
+      setStatusPages([]);
+      setMonitorsLoading(true);
+      setStatusPagesLoading(true);
+      setLogoutPhase(null);
+    }, 2100);
+  }
+
   const pageKey = `${tab}:${selected ? "detail" : "list"}`;
 
   return (
     <div className={`pl-shell${isMobile ? " pl-shell--with-tabbar" : ""}`}>
+      {logoutPhase && <LogoutTransition fading={logoutPhase === "fading"} />}
       <div className="pl-header">
         <div className="pl-brand">
           <svg className="pl-brand__mark" viewBox="0 0 100 100">
@@ -184,12 +225,7 @@ export default function App() {
           <SettingsView
             user={user}
             onUserUpdated={setUser}
-            onLoggedOut={() => {
-              if ("clearAppBadge" in navigator) {
-                navigator.clearAppBadge().catch(() => {});
-              }
-              setUser(null);
-            }}
+            onLoggedOut={handleLoggedOut}
             toast={toast}
           />
         )}

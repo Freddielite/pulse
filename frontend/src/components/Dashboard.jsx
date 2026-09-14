@@ -21,6 +21,7 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
   const [checking, setChecking] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const upCount = monitors.filter((m) => m.current_status === "up").length;
   const downCount = monitors.filter((m) => m.current_status === "down").length;
 
@@ -76,6 +77,7 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
 
   async function handleDeleteOne(id) {
     const monitor = monitors.find((m) => m.id === id);
+    setDeletingId(id);
     try {
       await deleteMonitor(id);
       toast(`${monitor?.name || "Monitor"} deleted.`);
@@ -83,6 +85,7 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
     } catch (err) {
       toast(err.message, "error");
     } finally {
+      setDeletingId(null);
       setConfirmingDeleteId(null);
     }
   }
@@ -206,7 +209,8 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
         <ConfirmDialog
           title="Delete this monitor?"
           body="This stops all checks for it and removes its history. This can't be undone."
-          confirmLabel="Delete"
+          confirmLabel={deletingId === confirmingDeleteId ? "Deleting..." : "Delete"}
+          busy={deletingId === confirmingDeleteId}
           onConfirm={() => handleDeleteOne(confirmingDeleteId)}
           onCancel={() => setConfirmingDeleteId(null)}
         />
