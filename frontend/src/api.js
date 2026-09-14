@@ -33,6 +33,7 @@ async function apiFetch(path, options = {}) {
 }
 
 export const signup = (payload) => apiFetch("/auth/signup", { method: "POST", body: JSON.stringify(payload) });
+export const verifyEmail = (token) => apiFetch("/auth/verify-email", { method: "POST", body: JSON.stringify({ token }) });
 export const login = (payload) => apiFetch("/auth/login", { method: "POST", body: JSON.stringify(payload) });
 export const logout = () => apiFetch("/auth/logout", { method: "POST" });
 export const getMe = () => apiFetch("/auth/me");

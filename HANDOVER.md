@@ -106,17 +106,22 @@ default, not a broken one.
   later check runs.
 - **Password change now invalidates every other active session for
   that account** - see "Recent changes" below.
-- **Signup's "an account with that email already exists" response
-  confirms whether an address is registered.** Standard trade-off (most
-  apps do this for the sake of a clear error message) rather than an
-  oversight, but it is a minor account-enumeration surface if that's
-  ever a concern for this deployment. Fixing this properly means not
-  confirming existence directly - an email-verification signup flow
-  (send a confirmation link, same generic response either way) instead
-  of creating the account immediately like it does now. That's a real
-  feature change, not a patch, so it's still open pending a decision on
-  whether it's worth building given signup's already gated behind
-  SIGNUP_CODE and rate-limited per-email.
+- **Signup is now email-verified rather than immediate.** `POST /signup`
+  no longer creates an account or confirms anything about whether an
+  email is registered - it always returns the same generic "check your
+  email" response, and a real account only gets created when the
+  confirmation link is clicked (`POST /verify-email`). Two residual
+  imperfections worth being honest about rather than claiming this is
+  airtight: (1) a genuine email-send failure on the *new*-signup path
+  returns a distinct error (since it has nothing to do with whether the
+  email existed, so surfacing it doesn't leak that), while the
+  *existing*-email path always returns the generic success regardless of
+  its own notification email's outcome - an attacker who could somehow
+  force Brevo to intermittently fail could use that asymmetry probabilistically
+  over many attempts; (2) `FRONTEND_URL` is required for this to work at
+  all now (there's no other channel to hand someone their token) -
+  `index.js` warns loudly at boot if it's missing, same as
+  `SESSION_SECRET`/`CRON_SECRET`.
 
 - **Domain (WHOIS) expiry is still best-effort, by nature of WHOIS
   itself.** Response formats aren't standardized across registrars -
@@ -200,6 +205,42 @@ default, not a broken one.
   cap with distinct-looking rows for what's really one problem.
 
 ## Recent changes
+
+- **Email-verified signup, closing the last of the three security-audit
+  trade-offs from before.**
+  - New `pending_signups` table (`db.js`): a signup attempt that hasn't
+    clicked its confirmation link isn't a row in `users` at all, which is
+    what makes the generic response possible - it never depends on
+    anything actually written to the real accounts table. `email` is
+    UNIQUE, so a repeat signup attempt for the same unconfirmed address
+    overwrites the row with a fresh token/password/expiry (covers both
+    "I mistyped my password" and "I lost the email, resend it" as the
+    same request, no separate resend endpoint needed). `token_hash`, not
+    the raw token, is stored - same reasoning as `api_tokens.token_hash`.
+    24-hour expiry, swept opportunistically on ~2% of signup requests
+    (same pattern as `rateLimit.js`'s existing `auth_attempts` sweep -
+    no background job runner in this app by design).
+  - `POST /api/auth/signup` (`auth.js`) rewritten: checks the signup
+    code/pending-invite gate as before, then always returns the same
+    generic "check your email" message - whether the email is new
+    (creates a `pending_signups` row, sends a confirmation link) or
+    already registered (sends a "someone tried to sign up with your
+    email" notice to the real account instead, confirms nothing to the
+    requester). New `POST /api/auth/verify-email` exchanges a valid,
+    unexpired token for an actual account: creates the row in `users`,
+    deletes the pending row, logs the session in, and runs
+    `claimPendingInvites` exactly like the old immediate-signup path did.
+  - Frontend: `AuthRoot.jsx`'s signup submit now shows a "check your
+    email" screen instead of transitioning straight into the app (there's
+    no session yet at that point). New `components/VerifyEmail.jsx`,
+    routed in `main.jsx` alongside the existing share-link/status-page
+    routes at `#/verify-email?token=...` - posts the token, and on
+    success just clears the URL and reloads so `App.jsx`'s own `getMe()`
+    picks up the session the confirmation call already set, rather than
+    threading a user object through props from outside App's tree.
+  - See Known limitations for the two things this doesn't fully close
+    (a minor timing/error asymmetry between the two response paths, and
+    the new hard requirement on `FRONTEND_URL`).
 
 - **Fixed two of the three security-audit trade-offs from last round;
   the third (signup email enumeration) is still open pending a decision

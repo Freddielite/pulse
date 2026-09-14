@@ -594,5 +594,29 @@ export async function migrate() {
       UNIQUE (monitor_id, violated_directive, blocked_uri, source_file)
     );
     CREATE INDEX IF NOT EXISTS idx_csp_violations_monitor ON csp_violations(monitor_id, last_seen_at DESC);
+
+    -- Email-verified signup: a row here is a signup attempt that hasn't
+    -- clicked its confirmation link yet, not a real account - nothing in
+    -- the users table exists until that click happens. This is what
+    -- lets POST /signup give the exact same response whether or not the
+    -- email is already registered (see routes/auth.js): the response
+    -- never depends on anything actually written to the users table.
+    -- email is UNIQUE so a repeat signup attempt for the same
+    -- not-yet-confirmed address overwrites this row with a fresh
+    -- token/password/expiry rather than erroring - both "I mistyped my
+    -- password" and "I lost the email, send it again" are the same
+    -- request and both should just work. token_hash, not the raw token,
+    -- is what's stored - same reasoning as api_tokens.token_hash: a
+    -- database dump shouldn't hand out usable confirmation tokens.
+    CREATE TABLE IF NOT EXISTS pending_signups (
+      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email          TEXT NOT NULL UNIQUE,
+      password_hash  TEXT NOT NULL,
+      alert_email    TEXT,
+      token_hash     TEXT NOT NULL,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at     TIMESTAMPTZ NOT NULL DEFAULT now() + interval '24 hours'
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_signups_token_hash ON pending_signups(token_hash);
   `);
 }

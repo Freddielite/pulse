@@ -13,19 +13,24 @@ export default function AuthRoot({ onAuthed }) {
   const [awaitingTotp, setAwaitingTotp] = useState(false);
   const [totpCode, setTotpCode] = useState("");
   const [useBackupCode, setUseBackupCode] = useState(false);
+  // Set once signup succeeds - there's no session yet (see api.js's
+  // verifyEmail/routes/auth.js: nothing is created until the
+  // confirmation link is clicked), so this replaces the form with
+  // "check your email" instead of calling onAuthed.
+  const [signupMessage, setSignupMessage] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      const result = mode === "login"
-        ? await login({ email, password })
-        : await signup({ email, password, signup_code: signupCode });
-      if (result.requires_totp) {
-        setAwaitingTotp(true);
+      if (mode === "login") {
+        const result = await login({ email, password });
+        if (result.requires_totp) setAwaitingTotp(true);
+        else onAuthed(result);
       } else {
-        onAuthed(result);
+        const result = await signup({ email, password, signup_code: signupCode });
+        setSignupMessage(result.message);
       }
     } catch (err) {
       setError(err.message);
@@ -62,7 +67,24 @@ export default function AuthRoot({ onAuthed }) {
         </div>
         <div className="pl-auth__tagline">Uptime and keep-alive monitoring for what you've built.</div>
 
-        {awaitingTotp ? (
+        {signupMessage ? (
+          <>
+            <div className="pl-auth__tagline">{signupMessage}</div>
+            <button
+              className="pl-btn"
+              type="button"
+              style={{ width: "100%" }}
+              onClick={() => {
+                setSignupMessage(null);
+                setMode("login");
+                setPassword("");
+                setSignupCode("");
+              }}
+            >
+              Back to log in
+            </button>
+          </>
+        ) : awaitingTotp ? (
           <form onSubmit={handleVerifyTotp}>
             <div className="pl-field">
               <label>{useBackupCode ? "Backup code" : "6-digit code from your authenticator app"}</label>

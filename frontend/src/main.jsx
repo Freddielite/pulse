@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import SharedMonitorView from "./components/SharedMonitorView.jsx";
 import SharedStatusPageView from "./components/SharedStatusPageView.jsx";
+import VerifyEmail from "./components/VerifyEmail.jsx";
 import "./App.css";
 
 // Belt-and-braces for the "no copying UI text" behavior set up in
@@ -63,11 +64,13 @@ if ("serviceWorker" in navigator) {
 }
 
 // A share link is #/share/<token>, a combined status page link is
-// #/status/<token> - both checked here, before App (and its
-// getMe()/session check) ever mounts, so opening either never triggers
-// a login prompt or touches the authed app at all.
+// #/status/<token>, and an account-confirmation link is
+// #/verify-email?token=<token> - all three checked here, before App
+// (and its getMe()/session check) ever mounts, so opening any of them
+// never triggers a login prompt or touches the authed app at all.
 const shareMatch = window.location.hash.match(/^#\/share\/(.+)$/);
 const statusPageMatch = window.location.hash.match(/^#\/status\/(.+)$/);
+const verifyMatch = window.location.hash.match(/^#\/verify-email\?token=(.+)$/);
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
@@ -75,6 +78,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <SharedMonitorView token={decodeURIComponent(shareMatch[1])} />
     ) : statusPageMatch ? (
       <SharedStatusPageView token={decodeURIComponent(statusPageMatch[1])} />
+    ) : verifyMatch ? (
+      <VerifyEmail token={decodeURIComponent(verifyMatch[1])} />
     ) : (
       <App />
     )}

@@ -35,6 +35,13 @@ if (process.env.NODE_ENV === "production" && !process.env.CRON_SECRET) {
       "user on demand. Set CRON_SECRET here and add the same value to whatever calls this endpoint (cron-job.org)."
   );
 }
+if (process.env.NODE_ENV === "production" && !process.env.FRONTEND_URL) {
+  console.error(
+    "WARNING: FRONTEND_URL is not set. New signups can't complete - the confirmation email has no link to put " +
+      "the verification token in, so nobody who signs up can actually create an account. Set FRONTEND_URL to " +
+      "this app's real frontend URL (e.g. https://your-app.vercel.app)."
+  );
+}
 
 // Render sits behind a proxy that terminates TLS, so without this Express
 // never sees the connection as "secure" and refuses to set secure cookies

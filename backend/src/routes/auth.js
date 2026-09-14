@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
@@ -6,6 +7,8 @@ import { authRateLimit } from "../middleware/rateLimit.js";
 import { normalizeNotificationPrefs } from "../lib/notificationPrefs.js";
 import { generateSecret, otpauthUrl, verifyTotp, generateBackupCodes } from "../lib/totp.js";
 import { sendWebhookAlert } from "../lib/webhook.js";
+import { sendAlertEmail } from "../lib/mailer.js";
+import { hashToken } from "../lib/apiTokens.js";
 import { claimPendingInvites } from "../lib/orgAccess.js";
 import { assertPublicHttpUrl } from "../lib/urlSafety.js";
 
@@ -20,6 +23,13 @@ const ME_COLUMNS = `id, email, alert_email, telegram_chat_id, webhook_url, diges
 // Signup gets a looser limit than login: it's already gated by
 // SIGNUP_CODE on any instance that needs it, and the thing being
 // prevented here is bulk account creation rather than password guessing.
+//
+// Email-verified rather than immediate: nothing is written to the users
+// table until the confirmation link is clicked (see pending_signups in
+// db.js), specifically so this response can be identical whether or not
+// the email already has an account - the old version's 409 "an account
+// with that email already exists" directly confirmed which emails were
+// registered to anyone willing to try one.
 router.post("/signup", authRateLimit({ max: 5, windowMinutes: 60 }), async (req, res) => {
   const { email, password, signup_code, alert_email } = req.body;
   if (!email || !password || password.length < 8) {
@@ -42,25 +52,124 @@ router.post("/signup", authRateLimit({ max: 5, windowMinutes: 60 }), async (req,
   if (process.env.SIGNUP_CODE && !hasInvite && signup_code !== process.env.SIGNUP_CODE) {
     // A wrong signup code counts as a failed attempt, otherwise the code
     // itself is brute-forceable at whatever rate the network allows.
+    // This check happening before the email-existence branch below is
+    // deliberate and safe: the signup code gates *attempting* signup at
+    // all, it isn't itself information about any specific email address,
+    // so a distinct error here doesn't reintroduce enumeration.
     await req.recordAuthFailure();
     return res.status(403).json({ error: "invalid signup code" });
   }
+
+  // Opportunistic cleanup, same pattern as rateLimit.js's auth_attempts
+  // sweep - no background job runner in this app by design, so an old,
+  // never-clicked pending signup gets swept during a normal request
+  // instead of needing one.
+  if (Math.random() < 0.02) {
+    pool.query(`DELETE FROM pending_signups WHERE expires_at < now()`).catch(() => {});
+  }
+
+  const GENERIC_MESSAGE = "If that email can be used to sign up, a confirmation link is on its way to it. Check your inbox (and spam folder) over the next few minutes.";
+  const appUrl = process.env.FRONTEND_URL?.trim();
+
+  const { rows: existingUser } = await pool.query(`SELECT id FROM users WHERE email = $1`, [normalizedEmail]);
+  if (existingUser.length > 0) {
+    // Never confirms anything to whoever's making this request, but does
+    // let the actual account holder know someone tried - the same
+    // trade-off a real password-reset flow makes. Awaited (not
+    // fire-and-forget) so this branch's latency matches the new-signup
+    // branch below rather than responding conspicuously faster, which
+    // would itself be a timing side-channel for the exact same
+    // enumeration this whole flow exists to close.
+    await sendAlertEmail({
+      to: normalizedEmail,
+      subject: "Someone tried to sign up with your email on Pulse",
+      text: `Someone just tried to create a new Pulse account using this email address, which already has one. If that was you, log in instead${appUrl ? ` at ${appUrl}` : ""}. If it wasn't you, no action is needed - nothing about your account changed.`,
+    }).catch((err) => console.error("signup-collision notice failed:", err.message));
+    return res.json({ message: GENERIC_MESSAGE });
+  }
+
+  const hash = await bcrypt.hash(password, 12);
+  const token = crypto.randomBytes(32).toString("base64url");
+  await pool.query(
+    `INSERT INTO pending_signups (email, password_hash, alert_email, token_hash, expires_at)
+     VALUES ($1, $2, $3, $4, now() + interval '24 hours')
+     ON CONFLICT (email) DO UPDATE SET
+       password_hash = EXCLUDED.password_hash,
+       alert_email = EXCLUDED.alert_email,
+       token_hash = EXCLUDED.token_hash,
+       expires_at = EXCLUDED.expires_at,
+       created_at = now()`,
+    [normalizedEmail, hash, alert_email?.trim() || normalizedEmail, hashToken(token)]
+  );
+
+  // FRONTEND_URL is required for this to actually work, not optional the
+  // way it is for an invite email - there's no other channel to hand the
+  // token to whoever's signing up. index.js warns loudly at boot if it's
+  // missing, same as SESSION_SECRET/CRON_SECRET.
+  const verifyUrl = appUrl ? `${appUrl.replace(/\/$/, "")}/#/verify-email?token=${token}` : null;
+  const emailResult = await sendAlertEmail({
+    to: normalizedEmail,
+    subject: "Confirm your Pulse account",
+    text: verifyUrl
+      ? `Confirm your new Pulse account by opening this link within the next 24 hours: ${verifyUrl}`
+      : `Confirm your new Pulse account with this code (valid 24 hours): ${token}`,
+    actionUrl: verifyUrl || undefined,
+    actionLabel: "Confirm account",
+  });
+  // Unlike every other email in this app, this one being sent IS the
+  // point of the request - there's no other way for a brand-new signup
+  // to get their token, and the response above is deliberately generic
+  // either way. A genuine send failure here (Brevo not configured, API
+  // error) has nothing to do with whether the email was already
+  // registered, so surfacing it honestly instead of the generic message
+  // doesn't reopen the enumeration this flow exists to close.
+  if (!emailResult.sent) {
+    console.error("verification email failed:", emailResult.reason);
+    return res.status(502).json({ error: "couldn't send the confirmation email right now - please try again shortly" });
+  }
+  res.json({ message: GENERIC_MESSAGE });
+});
+
+// The other half of the flow above: exchanges a confirmation token for
+// the actual account. Nothing meaningfully guessable here (the token is
+// 32 random bytes), so this rate limit is about abuse/DoS, not brute
+// force.
+router.post("/verify-email", authRateLimit({ max: 20, windowMinutes: 60, identifierField: "__none__" }), async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: "confirmation token is required" });
+
+  const { rows } = await pool.query(`SELECT * FROM pending_signups WHERE token_hash = $1`, [hashToken(token)]);
+  const pending = rows[0];
+  if (!pending) return res.status(400).json({ error: "this confirmation link is invalid or has already been used" });
+  if (new Date(pending.expires_at) < new Date()) {
+    await pool.query(`DELETE FROM pending_signups WHERE id = $1`, [pending.id]);
+    return res.status(400).json({ error: "this confirmation link has expired - please sign up again" });
+  }
+
   try {
-    const hash = await bcrypt.hash(password, 12);
-    const { rows } = await pool.query(
+    const { rows: created } = await pool.query(
       `INSERT INTO users (email, password_hash, alert_email) VALUES ($1, $2, $3)
        RETURNING id, email, alert_email`,
-      [normalizedEmail, hash, alert_email?.trim() || normalizedEmail]
+      [pending.email, pending.password_hash, pending.alert_email]
     );
-    req.session.userId = rows[0].id;
+    await pool.query(`DELETE FROM pending_signups WHERE id = $1`, [pending.id]);
+    req.session.userId = created[0].id;
     // Claims any invite sent to this address before the account existed
     // - see claimPendingInvites for why this has to happen exactly here.
-    await claimPendingInvites(rows[0].id, rows[0].email);
-    res.status(201).json(rows[0]);
+    await claimPendingInvites(created[0].id, created[0].email);
+    res.status(201).json(created[0]);
   } catch (err) {
-    if (err.code === "23505") return res.status(409).json({ error: "an account with that email already exists" });
+    if (err.code === "23505") {
+      // The email got a real account through some other path (a race
+      // between two confirmations, an admin-created account) in the gap
+      // between this pending row being created and confirmed - already
+      // extremely unlikely given signup's own email-existence check, but
+      // handled honestly rather than surfacing a raw 500.
+      await pool.query(`DELETE FROM pending_signups WHERE id = $1`, [pending.id]);
+      return res.status(409).json({ error: "an account with that email already exists - try logging in instead" });
+    }
     console.error(err);
-    res.status(500).json({ error: "failed to sign up" });
+    res.status(500).json({ error: "failed to confirm account" });
   }
 });
 
