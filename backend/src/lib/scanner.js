@@ -21,6 +21,7 @@
 //    .env-shaped response to fail the .env check.
 
 import { SEVERITY, scoreFindings, gradeFor, sortFindings, summarize, severityRank } from "./severity.js";
+import { assertPublicHttpUrl } from "./urlSafety.js";
 
 // Hard ceiling on requests per scan. A scan runs unattended on a daily
 // sweep across every monitor, on a free-tier box, against sites the user
@@ -1162,6 +1163,13 @@ export async function scanSite(url, options = {}) {
   const budget = new RequestBudget(MAX_REQUESTS);
   const findings = [];
 
+  try {
+    await assertPublicHttpUrl(url);
+  } catch (err) {
+    const failed = [finding("Site reachable", false, `Could not scan: ${err.message}`, SEVERITY.CRITICAL, "transport")];
+    return { score: 0, grade: "F", findings: failed, summary: summarize(failed), meta: { scannedUrl: url, reachable: false } };
+  }
+
   // An API that requires auth answers with a 401 whose headers may differ
   // from the real thing, so the monitor's own auth header is reused for
   // the main request when it has one. Only ever sent to the monitor's own
@@ -1179,6 +1187,23 @@ export async function scanSite(url, options = {}) {
   const finalUrl = response.url || url;
   const isHttps = finalUrl.startsWith("https://");
   const origin = new URL(finalUrl).origin;
+
+  // The URL given to scanSite() just passed the check above, but this
+  // scan is about to fire dozens more requests (every path in
+  // EXPOSED_PATHS/API_SURFACE_PATHS, CORS/TRACE/GraphQL probes) against
+  // `origin` specifically, which can differ from `url` if the first
+  // request redirected somewhere else. Re-checking origin here closes
+  // that gap - a single accepted redirect to an internal address would
+  // otherwise turn into the full scan's worth of requests landing there
+  // instead of one.
+  if (origin !== new URL(url).origin) {
+    try {
+      await assertPublicHttpUrl(origin);
+    } catch (err) {
+      const failed = [finding("Site reachable", false, `Redirects to an address this scan won't follow: ${err.message}`, SEVERITY.CRITICAL, "transport")];
+      return { score: 0, grade: "F", findings: failed, summary: summarize(failed), meta: { scannedUrl: url, reachable: false } };
+    }
+  }
 
   findings.push(
     finding(

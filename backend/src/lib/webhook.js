@@ -13,10 +13,19 @@
 // their own receiving end (a Zapier/Make step, a tiny relay function)
 // without Pulse needing to know about every provider individually.
 
+import { assertPublicHttpUrl } from "./urlSafety.js";
+
 const REQUEST_TIMEOUT_MS = 8000;
 
 export async function sendWebhookAlert(url, { event, severity = null, title, body = "", monitor = null }) {
   if (!url) return { sent: false, reason: "no webhook url configured" };
+
+  try {
+    await assertPublicHttpUrl(url);
+  } catch (err) {
+    console.error(`Webhook URL rejected for "${event}": ${err.message}`);
+    return { sent: false, reason: err.message };
+  }
 
   const payload = {
     event,

@@ -1,4 +1,5 @@
 import net from "node:net";
+import { assertPublicHost } from "./urlSafety.js";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 15000;
 const RETRY_DELAY_MS = 4000;
@@ -29,6 +30,17 @@ async function runSingleAttempt(monitor) {
   const timeoutMs = (monitor.check_timeout_sec || DEFAULT_CHECK_TIMEOUT_MS / 1000) * 1000;
   const start = Date.now();
   const { hostname, port } = parseTcpTarget(monitor.url);
+
+  // Worth being extra deliberate about here specifically: an open/closed/
+  // timed-out verdict on an arbitrary host:port is, functionally, a port
+  // scanner - probably the single most useful primitive an SSRF gap could
+  // hand someone against a hosting provider's own internal network. Same
+  // re-check-every-attempt reasoning as the HTTP checks either way.
+  try {
+    await assertPublicHost(hostname);
+  } catch (err) {
+    return { status: "down", statusCode: null, responseMs: Date.now() - start, errorMessage: err.message, contentHash: null };
+  }
 
   return new Promise((resolve) => {
     const socket = new net.Socket();

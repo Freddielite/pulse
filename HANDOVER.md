@@ -97,30 +97,26 @@ default, not a broken one.
   now logs a loud warning at boot if either is missing in production,
   so this shows up in the logs instead of just working in a way that
   looks identical to being configured correctly.
-- **Monitor URLs and the webhook URL are unrestricted - nothing stops
-  either from pointing at an internal/private address.** This is
-  inherent to what an uptime monitor does (it has to be able to fetch
-  whatever URL is given it), not a bug to patch out, but it does mean a
-  monitor or webhook URL is a way to make this app's own server issue a
-  request somewhere it otherwise couldn't reach - a monitor's response
-  is shown back to whoever owns it, so that one carries more signal
-  than the webhook (fire-and-forget, no response body surfaced) if
-  someone with account access ever pointed either at Render's internal
-  network rather than a real site. Worth knowing about, not urgent to
-  block given the current small/trusted user base - flagging so it's a
-  deliberate trade-off rather than an unnoticed gap.
-- **Password change doesn't invalidate other active sessions for that
-  account.** If a session was ever compromised independently of the
-  password (a stolen cookie, a shared/unlocked device), changing the
-  password doesn't kick that session out - sessions are stored keyed by
-  session ID, not by user, so there's currently no query that could find
-  "every other session for this user" to clear. Fixable, but needs a
-  user_id column added to the session store rather than a quick patch.
+- **Monitor URLs, the webhook URL, and every check type now reject
+  private/reserved addresses** (loopback, RFC1918 ranges, link-local
+  including the 169.254.169.254 cloud metadata address every provider
+  uses) - see "Recent changes" below. Re-checked on every actual
+  request, not just once at save time, since DNS for a hostname that
+  was public when saved can point somewhere private by the time a
+  later check runs.
+- **Password change now invalidates every other active session for
+  that account** - see "Recent changes" below.
 - **Signup's "an account with that email already exists" response
   confirms whether an address is registered.** Standard trade-off (most
   apps do this for the sake of a clear error message) rather than an
   oversight, but it is a minor account-enumeration surface if that's
-  ever a concern for this deployment.
+  ever a concern for this deployment. Fixing this properly means not
+  confirming existence directly - an email-verification signup flow
+  (send a confirmation link, same generic response either way) instead
+  of creating the account immediately like it does now. That's a real
+  feature change, not a patch, so it's still open pending a decision on
+  whether it's worth building given signup's already gated behind
+  SIGNUP_CODE and rate-limited per-email.
 
 - **Domain (WHOIS) expiry is still best-effort, by nature of WHOIS
   itself.** Response formats aren't standardized across registrars -
@@ -205,6 +201,34 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Fixed two of the three security-audit trade-offs from last round;
+  the third (signup email enumeration) is still open pending a decision
+  - see Known limitations.**
+  - **SSRF protection across every outbound request this app makes to a
+    user-supplied address.** New `lib/urlSafety.js`: resolves a URL's
+    hostname and rejects it if any resolved address is private,
+    loopback, link-local (including 169.254.169.254, where every major
+    cloud provider serves instance metadata), or otherwise not a real
+    public destination. Wired into `httpCheck.js`, `authProbe.js`,
+    `syntheticCheck.js` (checked per step, since a later step can point
+    at a different host than step one), `tcpCheck.js` (arguably the
+    highest-value fix here - an open/closed/timeout verdict on an
+    arbitrary host:port is functionally a port scanner), `scanner.js`
+    (checked on the original URL and again on the post-redirect origin,
+    since the scan fires ~30 more requests against that origin), and
+    `webhook.js`. Also added as save-time validation in `monitors.js`
+    (create/update) and `auth.js` (webhook URL) for fast feedback, but
+    the actual enforcement is the request-time checks above - DNS for a
+    hostname that was public when saved can point somewhere private by
+    the time a later check actually runs, so a save-time-only check
+    would leave that gap wide open.
+  - **`/change-password` now invalidates every other active session for
+    the account**, keeping only the current session (the one that just
+    changed the password) alive. Sessions are stored by connect-pg-simple
+    as JSON keyed by session ID rather than user ID, but requireAuth.js
+    already puts `userId` inside that JSON on every session - so this
+    reuses that instead of needing a schema change:
+    `DELETE FROM session WHERE sess->>'userId' = $1 AND sid != $2`.
 - **Security audit pass: two real gaps fixed, several noted as
   deliberate trade-offs (see Known limitations).**
   - **Fixed: an org admin could remove an org owner.** `DELETE

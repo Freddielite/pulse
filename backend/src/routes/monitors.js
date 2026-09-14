@@ -5,6 +5,8 @@ import { runUptimeChecks, scanAndRecord, runDnsSweep, runCtSweep } from "../lib/
 import { parseAcceptedStatuses } from "../lib/authProbe.js";
 import { generateShareToken } from "../lib/shareLinks.js";
 import { requireOrgRole, logOrgAction } from "../lib/orgAccess.js";
+import { assertPublicHttpUrl, assertPublicHost } from "../lib/urlSafety.js";
+import { parseTcpTarget } from "../lib/tcpCheck.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -58,6 +60,30 @@ function validateTcpUrl(url) {
   if (parsed.protocol !== "tcp:") return "a TCP monitor's URL must start with tcp://, e.g. tcp://db.example.com:5432";
   if (!parsed.port) return "a TCP monitor's URL needs a port, e.g. tcp://db.example.com:5432";
   return null;
+}
+
+// Fast, save-time feedback for the common case (a plainly private
+// hostname/IP typed by mistake or on purpose) - the actual enforcement
+// this can't fully replace lives at check time in httpCheck.js/
+// syntheticCheck.js/tcpCheck.js/scanner.js, re-resolved on every run,
+// because DNS for a hostname that was public when this validation ran
+// can point somewhere private by the time a later check actually fires.
+// Rejects here rather than silently accepting, though, so a monitor
+// aimed at an obviously-private target gets an immediate, readable error
+// instead of quietly going "down" forever on every check with no
+// explanation of why.
+async function validatePublicTarget(type, url) {
+  try {
+    if (type === "tcp") {
+      const { hostname } = parseTcpTarget(url);
+      await assertPublicHost(hostname);
+    } else {
+      await assertPublicHttpUrl(url);
+    }
+    return null;
+  } catch (err) {
+    return err.message;
+  }
 }
 
 // auth_probe_expect is a comma-separated status list. Validated here
@@ -164,6 +190,8 @@ router.post("/", async (req, res) => {
     const tcpError = validateTcpUrl(url);
     if (tcpError) return res.status(400).json({ error: tcpError });
   }
+  const ssrfError = await validatePublicTarget(type, url);
+  if (ssrfError) return res.status(400).json({ error: ssrfError });
   // Assigning a new monitor to an org, rather than keeping it personal,
   // takes admin+ in that org - member is view-only for creation, the one
   // place role actually gates a monitor-mutation action (see the note
@@ -240,6 +268,15 @@ router.patch("/:id", async (req, res) => {
       const tcpError = validateTcpUrl(url);
       if (tcpError) return res.status(400).json({ error: tcpError });
     }
+  }
+  if (url !== undefined) {
+    // Whichever type is actually in effect after this request, not
+    // necessarily monitor_type as sent - most edits only touch the URL
+    // without also resending monitor_type, and this needs to validate
+    // as whatever the monitor already is in that case.
+    const effectiveType = monitor_type !== undefined ? normalizeMonitorType(monitor_type) : monitor.monitor_type;
+    const ssrfError = await validatePublicTarget(effectiveType, url);
+    if (ssrfError) return res.status(400).json({ error: ssrfError });
   }
   // Moving a monitor between personal and org ownership (or between two
   // orgs) is deliberately narrower than the general admin+ gate above:

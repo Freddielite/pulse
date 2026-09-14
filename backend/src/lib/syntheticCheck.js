@@ -1,3 +1,5 @@
+import { assertPublicHttpUrl } from "./urlSafety.js";
+
 const DEFAULT_STEP_TIMEOUT_MS = 15000;
 
 // See httpCheck.js for why this exists: no User-Agent/Accept headers
@@ -62,6 +64,11 @@ export async function runSyntheticCheck(monitor) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response;
     try {
+      // Re-checked per step, per run - a later step's URL can point at a
+      // completely different host than step one, and (see urlSafety.js)
+      // a cached "was safe when this monitor was created" check
+      // wouldn't actually close the DNS-rebinding gap anyway.
+      await assertPublicHttpUrl(url);
       response = await fetch(url, {
         method: step.method || "GET",
         headers: { ...authHeaders, ...(cookieHeader ? { Cookie: cookieHeader } : {}) },

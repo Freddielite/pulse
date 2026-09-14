@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { assertPublicHttpUrl } from "./urlSafety.js";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 15000;
 const RETRY_DELAY_MS = 4000;
@@ -61,6 +62,15 @@ function extractVisibleText(html) {
 // the current CONTENT_HASH_VERSION scheme (extractVisibleText below) -
 // see checkRunner.js for what it does with it.
 async function runSingleAttempt(monitor) {
+  // Re-checked on every single attempt, not once at monitor creation -
+  // see urlSafety.js for why a cached "was safe when created" check
+  // wouldn't actually close this gap.
+  try {
+    await assertPublicHttpUrl(monitor.url);
+  } catch (err) {
+    return { status: "down", statusCode: null, responseMs: 0, errorMessage: err.message, contentHash: null };
+  }
+
   // check_timeout_sec is per-monitor (see db.js) - falls back to the old
   // fixed default for any row from before that column existed, or if it's
   // ever null for some other reason.

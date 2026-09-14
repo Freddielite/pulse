@@ -18,6 +18,8 @@
 // anything, and never touches an endpoint the user hasn't explicitly
 // pointed it at and opted in for.
 
+import { assertPublicHttpUrl } from "./urlSafety.js";
+
 const RETRY_DELAY_MS = 3000;
 const DEFAULT_ACCEPTED = [401, 403];
 
@@ -36,6 +38,14 @@ export function parseAcceptedStatuses(raw) {
 
 async function probeOnce(monitor, accepted) {
   const timeoutMs = (monitor.check_timeout_sec || 15) * 1000;
+  // Same re-check-every-time reasoning as httpCheck.js - this is a
+  // separate outbound request on its own code path, not something that
+  // inherits whatever httpCheck.js already checked this cycle.
+  try {
+    await assertPublicHttpUrl(monitor.url);
+  } catch (err) {
+    return { verdict: "inconclusive", statusCode: null, detail: `Couldn't complete the probe: ${err.message}` };
+  }
   try {
     const response = await fetch(monitor.url, {
       method: monitor.method || "GET",

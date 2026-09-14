@@ -7,6 +7,7 @@ import { normalizeNotificationPrefs } from "../lib/notificationPrefs.js";
 import { generateSecret, otpauthUrl, verifyTotp, generateBackupCodes } from "../lib/totp.js";
 import { sendWebhookAlert } from "../lib/webhook.js";
 import { claimPendingInvites } from "../lib/orgAccess.js";
+import { assertPublicHttpUrl } from "../lib/urlSafety.js";
 
 const router = Router();
 
@@ -152,6 +153,17 @@ router.post("/change-password", requireAuth, authRateLimit({ max: 5, windowMinut
   }
   const hash = await bcrypt.hash(new_password, 12);
   await pool.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [req.userId, hash]);
+  // Kicks out every other session for this account - the actual point
+  // of changing a password after a suspected compromise is to end
+  // whatever session an attacker might be holding, and a session store
+  // that doesn't already track user_id per row (connect-pg-simple's
+  // default schema doesn't) still has the data to do this: sess is
+  // stored as JSON with whatever requireAuth.js put there, and
+  // req.session.userId is already the field it checks on every request.
+  // The current session (this request's own) is deliberately kept
+  // alive - changing your password shouldn't also log out the browser
+  // tab you just changed it from.
+  await pool.query(`DELETE FROM session WHERE sess->>'userId' = $1 AND sid != $2`, [req.userId, req.sessionID]);
   res.json({ ok: true });
 });
 
@@ -239,6 +251,18 @@ router.patch("/me", requireAuth, async (req, res) => {
   const { alert_email, telegram_chat_id, webhook_url, digest_enabled, digest_day_of_week, breach_monitoring_enabled, notification_prefs } = req.body;
   if (digest_day_of_week !== undefined && (!Number.isInteger(digest_day_of_week) || digest_day_of_week < 0 || digest_day_of_week > 6)) {
     return res.status(400).json({ error: "digest_day_of_week must be an integer 0 (Sunday) through 6 (Saturday)" });
+  }
+  // Same reasoning as monitor URLs (see lib/urlSafety.js): a webhook URL
+  // is another way to make this server issue a request wherever it's
+  // pointed. sendWebhookAlert() re-checks at send time regardless (DNS
+  // can change after this passes), so this is purely for fast feedback
+  // on the obvious case rather than the actual enforcement boundary.
+  if (webhook_url) {
+    try {
+      await assertPublicHttpUrl(webhook_url);
+    } catch (err) {
+      return res.status(400).json({ error: `webhook URL ${err.message}` });
+    }
   }
   // Merged against the current row (not just the default shape) so a
   // PATCH that only touches, say, push.down doesn't clobber telegram or
