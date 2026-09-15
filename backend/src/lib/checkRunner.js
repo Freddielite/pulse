@@ -601,12 +601,14 @@ export async function runDnsSweep({ userId = null, monitorId = null, limit = MAX
 
     // First snapshot is a baseline, not a change - same rule as every
     // other before/after detector in this app.
-    for (const change of diffSnapshots(previous, snapshot)) {
+    for (const change of await diffSnapshots(previous, snapshot)) {
       await recordSecurityEvent(monitor, {
         kind: "dns_drift",
         severity: change.severity,
         title: `${change.label} record changed`,
-        detail: `${change.summary}. If you didn't make this change, treat it seriously - DNS is how an attacker redirects a domain without ever touching the server.`,
+        detail: change.sameNetworkAsn
+          ? `${change.summary}. The old and new address both belong to the same network (AS${change.sameNetworkAsn}) - this is what a hosting provider rotating its own infrastructure looks like, not usually a hijack. Still worth a glance if it's unexpected, just not urgent the way a change to an unrelated network would be.`
+          : `${change.summary}. If you didn't make this change, treat it seriously - DNS is how an attacker redirects a domain without ever touching the server.`,
         data: change,
         dedupeKey: `${change.record}:${[...change.added, ...change.removed].sort().join(",")}`,
       });

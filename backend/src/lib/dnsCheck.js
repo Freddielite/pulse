@@ -16,8 +16,14 @@
 // node:dns/promises is built in, so none of this adds a dependency.
 
 import dns from "node:dns/promises";
+import net from "node:net";
 
 const LOOKUP_TIMEOUT_MS = 8000;
+// Deliberately short - this only ever softens an alert's wording, never
+// blocks or delays recording it, so a slow/unreachable ASN lookup should
+// just give up and let the change get reported at its normal severity
+// rather than holding up the DNS sweep for a "nice to have."
+const ASN_LOOKUP_TIMEOUT_MS = 2500;
 
 // Every resolver call is wrapped so a missing record (the common case -
 // NODATA/NXDOMAIN throw rather than returning empty) reads as "not
@@ -118,7 +124,35 @@ const RECORD_LABELS = {
   dmarc: "DMARC",
 };
 
-export function diffSnapshots(previous, current) {
+const SEVERITY_DOWNGRADE = { critical: "high", high: "medium", medium: "low", low: "low" };
+
+// Team Cymru's free, no-API-key IP-to-ASN lookup, done over DNS (the
+// same "query a TXT record" shape every other check in this file
+// already uses, so this doesn't introduce a new kind of dependency or
+// a third-party API key to manage). For IP a.b.c.d, the octets reversed
+// plus this suffix return "ASN | prefix | country | registry | date" -
+// only the ASN is used here. IPv6-only in the sense that this
+// implementation doesn't bother supporting it (Cymru does have a v6
+// origin service at a different suffix, but AAAA-record churn is rare
+// enough on the sites this app monitors that it isn't worth a second
+// code path yet).
+async function lookupAsn(ip) {
+  if (net.isIP(ip) !== 4) return null;
+  const reversed = ip.split(".").reverse().join(".");
+  try {
+    const records = await Promise.race([
+      dns.resolveTxt(`${reversed}.origin.asn.cymru.com`),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("ASN lookup timed out")), ASN_LOOKUP_TIMEOUT_MS)),
+    ]);
+    const line = records[0]?.join("");
+    const asn = line?.split("|")[0]?.trim();
+    return asn || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function diffSnapshots(previous, current) {
   if (!previous) return [];
   const changes = [];
   for (const key of Object.keys(DRIFT_SEVERITY)) {
@@ -132,12 +166,36 @@ export function diffSnapshots(previous, current) {
     const added = after.filter((value) => !before.includes(value));
     const removed = before.filter((value) => !after.includes(value));
     if (added.length === 0 && removed.length === 0) continue;
+
+    let severity = DRIFT_SEVERITY[key];
+    // A record (IPv4) changing to a genuinely different network is one
+    // of the few real early signals of a DNS/registrar-account
+    // compromise - but changing to a DIFFERENT ADDRESS ON THE SAME
+    // NETWORK is what a hosting provider's own infrastructure churn
+    // looks like (an anycast rebalance, a new edge IP range - the
+    // Vercel migration that motivated this is a real example), and it's
+    // indistinguishable from a hijack by IP value alone. Same ASN isn't
+    // proof nothing's wrong - nothing stops an attacker from operating
+    // inside a big provider's network too - so this softens the
+    // severity and wording rather than suppressing the event outright;
+    // it's still worth a glance, just not "someone hijacked your
+    // domain" urgent.
+    let sameNetworkAsn = null;
+    if (key === "a" && added.length > 0 && removed.length > 0) {
+      const [addedAsn, removedAsn] = await Promise.all([lookupAsn(added[0]), lookupAsn(removed[0])]);
+      if (addedAsn && removedAsn && addedAsn === removedAsn) {
+        sameNetworkAsn = addedAsn;
+        severity = SEVERITY_DOWNGRADE[severity] || severity;
+      }
+    }
+
     changes.push({
       record: key,
       label: RECORD_LABELS[key] || key.toUpperCase(),
-      severity: DRIFT_SEVERITY[key],
+      severity,
       added,
       removed,
+      sameNetworkAsn,
       summary: [
         added.length > 0 ? `added ${added.join(", ")}` : null,
         removed.length > 0 ? `removed ${removed.join(", ")}` : null,

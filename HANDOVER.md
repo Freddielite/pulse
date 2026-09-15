@@ -206,6 +206,40 @@ default, not a broken one.
 
 ## Recent changes
 
+- **DNS-change alerts now check whether the new IP still belongs to the
+  same network before treating it as urgent.** Prompted by a real case:
+  Vercel migrated several monitored sites to a new anycast IP range
+  (`216.198.79.x`/`64.29.17.x`), and every one of them fired a full
+  "possible domain hijack" alert for what was actually Vercel's own
+  infrastructure rotation. `dnsCheck.js` now looks up the ASN (via Team
+  Cymru's free DNS-based lookup - no API key, same "query a TXT record"
+  shape every other check here already uses) for the old and new IP on
+  an A-record change; if they match, the event's severity is downgraded
+  one level and the message explains it's what a hosting provider
+  rotating its own infrastructure looks like, rather than the "if you
+  didn't make this change, treat it seriously" hijack wording. Same ASN
+  isn't proof nothing's wrong - nothing stops an attacker from operating
+  inside a big provider's network too - so this softens the alert, it
+  never suppresses it outright. Scoped to A records only (not NS/CNAME/
+  AAAA) since that's an ASN-lookupable IP address, not a hostname.
+  `diffSnapshots()` in `dnsCheck.js` is now async as a result (one call
+  site, in `checkRunner.js`'s DNS sweep, updated to await it).
+- **False downtime alerts on Vercel-hosted frontends, a second time:
+  confirmed as a Vercel-side infrastructure issue, not a Pulse bug or
+  something fixable here.** The IPs in the DNS-change alerts above
+  (`216.198.79.67`/`64.29.17.67`) are the exact addresses named in an
+  active Vercel community report about connections stalling mid-TLS-
+  handshake from certain networks - one of several open threads about
+  this same new anycast range failing intermittently depending which
+  network is connecting (Brazil, Morocco, Rwanda, Myanmar, Russia, South
+  Korea all separately reported). If Render's network is one of the
+  affected paths, no header or check-logic change on Pulse's side fixes
+  it - it's Vercel's routing to sort out. The practical mitigation
+  already exists and doesn't need new code: raise a monitor's "alert
+  after N consecutive failures" threshold (currently defaults to 1)
+  above 1 for a monitor that's prone to this, so a single transient
+  routing hiccup gets silently retried instead of firing an alert.
+
 - **Fixed: 2FA and every toggle in Settings showed as disabled/off right
   after logging in, even when they were actually on - fixed itself on a
   full app restart.** Root cause: `POST /login`, `POST
