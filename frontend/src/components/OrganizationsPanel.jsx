@@ -329,16 +329,15 @@ function OrgDetail({ orgId, myRole, onChanged, toast }) {
           <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={() => setConfirmingDelete(true)}>
             Delete organization
           </button>
-          {confirmingDelete && (
-            <ConfirmDialog
-              title="Delete this organization?"
-              body="Its monitors and status pages aren't deleted - they become personal to whoever created each one. Membership and the audit log are gone for good."
-              confirmLabel={deletingOrg ? "Deleting..." : "Delete organization"}
-              busy={deletingOrg}
-              onConfirm={handleDelete}
-              onCancel={() => setConfirmingDelete(false)}
-            />
-          )}
+          <ConfirmDialog
+            open={confirmingDelete}
+            title="Delete this organization?"
+            body="Its monitors and status pages aren't deleted - they become personal to whoever created each one. Membership and the audit log are gone for good."
+            confirmLabel={deletingOrg ? "Deleting..." : "Delete organization"}
+            busy={deletingOrg}
+            onConfirm={handleDelete}
+            onCancel={() => setConfirmingDelete(false)}
+          />
         </div>
       )}
     </div>

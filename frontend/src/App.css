@@ -944,6 +944,29 @@ a {
      above; this just needs its own copy because it's a separate scroll
      container. */
   overscroll-behavior: contain;
+  /* Same easing as .pl-page's transitions (App.css) - one motion
+     language across the app rather than every animated thing picking
+     its own curve. Enter is a touch slower than exit: arriving should
+     feel deliberate, leaving should feel quick and out of the way. See
+     ModalOverlay.jsx for why closing needs its own lingering-mount
+     logic rather than this class alone being enough. */
+  animation: pl-overlay-in 0.22s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+.pl-overlay--closing {
+  animation: pl-overlay-out 0.18s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+@keyframes pl-overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pl-overlay-out {
+  to {
+    opacity: 0;
+  }
 }
 
 .pl-modal {
@@ -953,6 +976,29 @@ a {
   padding: 24px;
   width: 100%;
   max-width: 480px;
+  animation: pl-modal-in 0.22s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+/* Driven by the parent .pl-overlay's class rather than needing its own
+   modifier class - one class flip on the overlay animates both layers
+   together instead of every caller having to thread a "closing" flag
+   down to its own modal panel too. */
+.pl-overlay--closing .pl-modal {
+  animation: pl-modal-out 0.18s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+@keyframes pl-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+}
+
+@keyframes pl-modal-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
 }
 
 .pl-modal__title {
@@ -1213,6 +1259,29 @@ a {
   padding: 10px 16px;
   font-size: 13px;
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
+  /* Same motion language as the modal overlay/page transitions - see
+     App.css's .pl-overlay comment. Toasts get a shorter travel distance
+     (they're small and already near the bottom edge) but the same
+     curve, so nothing in the app moves with a different "personality." */
+  animation: pl-toast-in 0.22s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+.pl-toast--leaving {
+  animation: pl-toast-out 0.2s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+@keyframes pl-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes pl-toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
 }
 
 .pl-toast--error {

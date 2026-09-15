@@ -721,17 +721,16 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
         />
       )}
 
-      {confirmingDelete && (
-        <ConfirmDialog
-          title="Delete this monitor?"
-          body={`${monitor.name} and its full check history will be removed. This can't be undone.`}
-          confirmLabel={deleting ? "Deleting..." : "Delete"}
-          danger
-          busy={deleting}
-          onConfirm={handleDelete}
-          onCancel={() => setConfirmingDelete(false)}
-        />
-      )}
+      <ConfirmDialog
+        open={confirmingDelete}
+        title="Delete this monitor?"
+        body={`${monitor.name} and its full check history will be removed. This can't be undone.`}
+        confirmLabel={deleting ? "Deleting..." : "Delete"}
+        danger
+        busy={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmingDelete(false)}
+      />
     </div>
   );
 }

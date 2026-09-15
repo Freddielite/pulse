@@ -206,6 +206,56 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Fixed: 2FA and every toggle in Settings showed as disabled/off right
+  after logging in, even when they were actually on - fixed itself on a
+  full app restart.** Root cause: `POST /login`, `POST
+  /2fa/verify-login`, and the signup-confirmation endpoint each
+  hand-rolled their own response as `{ id, email, alert_email }` - only
+  three fields - while `GET /me` (used on every fresh app load) already
+  correctly returned the full row via `ME_COLUMNS`. So logging in handed
+  the frontend a `user` object where `totp_enabled`, `digest_enabled`,
+  `breach_monitoring_enabled`, etc. were simply `undefined` - which
+  Settings correctly rendered as "off/not enabled", because as far as it
+  knew, they were. Closing and reopening the app "fixed" it only because
+  that path always went through the one endpoint that was already
+  correct. New `toPublicUser()` helper in `auth.js` (picks the same
+  field list `ME_COLUMNS` selects out of a row already fetched via
+  `SELECT *`, which login/2FA verification need internally anyway for
+  `password_hash`/`totp_secret`/`totp_backup_codes` - no second query) -
+  now used by both login paths. The signup-confirmation `INSERT`'s
+  `RETURNING` clause was the same narrow list; changed to `RETURNING
+  ${ME_COLUMNS}` for the same reason, though a brand-new account's real
+  values happened to already match the frontend's fallback defaults, so
+  it wasn't visibly broken the same way.
+
+- **Modal and toast entry/exit animations - the whole app was missing
+  these entirely before now** (page-tab transitions already had their
+  own motion, this was the one remaining gap). New `ModalOverlay.jsx`:
+  shared portal/backdrop/scroll-lock shell now used by `ConfirmDialog`.
+  React unmounts the instant a parent stops rendering something, which
+  leaves no room for an exit animation to play - `ModalOverlay` solves
+  this by taking an `open` prop and staying mounted for 180ms after it
+  flips false (playing the `.pl-overlay--closing` animation) before
+  actually returning null, rather than the caller conditionally
+  rendering it directly. All four `ConfirmDialog` call sites (delete
+  monitor from the detail view, delete monitor from the dashboard,
+  delete status page, delete organization) changed from `{open &&
+  <ConfirmDialog .../>}` to always rendering it with `open={open}`, since
+  that lingering-mount trick only works if the component doing the
+  animating is the one that's always in the tree.
+  `MonitorForm`/`StatusPagesView`'s create/edit forms got the same visual
+  treatment but a simpler mechanism: they already reseed their internal
+  state from the `monitor`/`page` prop at first mount, so converting them
+  to the same always-mounted pattern risked breaking that for a
+  animation-only change. Instead they intercept their own close paths
+  (Cancel, backdrop click, a successful save) with a local `closing`
+  state before calling the real `onClose`/`onSaved` - covers every close
+  a person actually triggers; only an external force-close (logout
+  mid-edit) skips the animation, which doesn't matter since the logout
+  transition covers the whole screen immediately after anyway. Toasts
+  (`useToast.js`) got the equivalent treatment: marked `leaving` before
+  actually being removed from the list, same 180-200ms scale.
+
 - **Logout transition, login-lands-on-wrong-tab fix, and pending-state
   text on buttons that previously gave none.**
   - **Login after logout landed on Settings instead of the dashboard.**

@@ -262,7 +262,9 @@ export default function App() {
 
       <div className="pl-toast-stack">
         {toasts.map((t) => (
-          <div key={t.id} className={`pl-toast ${t.type === "error" ? "pl-toast--error" : ""}`}>{t.message}</div>
+          <div key={t.id} className={`pl-toast ${t.type === "error" ? "pl-toast--error" : ""} ${t.leaving ? "pl-toast--leaving" : ""}`}>
+            {t.message}
+          </div>
         ))}
       </div>
     </div>

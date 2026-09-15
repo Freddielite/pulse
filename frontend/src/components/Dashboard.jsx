@@ -205,16 +205,15 @@ export default function Dashboard({ monitors, loading, onSelect, onAdd, onChange
       )}
       </PullToRefresh>
 
-      {confirmingDeleteId && (
-        <ConfirmDialog
-          title="Delete this monitor?"
-          body="This stops all checks for it and removes its history. This can't be undone."
-          confirmLabel={deletingId === confirmingDeleteId ? "Deleting..." : "Delete"}
-          busy={deletingId === confirmingDeleteId}
-          onConfirm={() => handleDeleteOne(confirmingDeleteId)}
-          onCancel={() => setConfirmingDeleteId(null)}
-        />
-      )}
+      <ConfirmDialog
+        open={!!confirmingDeleteId}
+        title="Delete this monitor?"
+        body="This stops all checks for it and removes its history. This can't be undone."
+        confirmLabel={deletingId === confirmingDeleteId ? "Deleting..." : "Delete"}
+        busy={deletingId === confirmingDeleteId}
+        onConfirm={() => handleDeleteOne(confirmingDeleteId)}
+        onCancel={() => setConfirmingDeleteId(null)}
+      />
     </>
   );
 }

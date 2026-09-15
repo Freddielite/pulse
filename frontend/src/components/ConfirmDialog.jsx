@@ -1,18 +1,13 @@
-import { createPortal } from "react-dom";
-import { useBodyScrollLock } from "../hooks/useBodyScrollLock.js";
+import ModalOverlay from "./ModalOverlay.jsx";
 
-// Rendered via a portal straight to <body> rather than in place: this
-// is a position:fixed overlay, and several places that use it (e.g.
-// MonitorDetail) sit inside .pl-page, which applies a CSS transform
-// for the page-transition animation. Any transform on an ancestor -
-// even a finished one left behind by animation-fill-mode - creates a
-// new containing block, which would reposition/clip a fixed overlay
-// relative to that ancestor instead of the actual viewport. A portal
-// sidesteps the whole problem regardless of where this gets used.
-export default function ConfirmDialog({ title, body, confirmLabel = "Confirm", danger, busy = false, onConfirm, onCancel }) {
-  useBodyScrollLock(true);
-  return createPortal(
-    <div className="pl-overlay" onClick={busy ? undefined : onCancel}>
+// See ModalOverlay.jsx for why this takes an `open` prop instead of
+// being conditionally rendered by its caller ({open && <ConfirmDialog
+// .../>}) - that pattern can't animate an exit at all, since React
+// unmounts the instant the parent stops rendering it. Every caller
+// should render this unconditionally and just flip `open`.
+export default function ConfirmDialog({ open, title, body, confirmLabel = "Confirm", danger, busy = false, onConfirm, onCancel }) {
+  return (
+    <ModalOverlay open={open} onCancel={busy ? undefined : onCancel} closeOnBackdrop={!busy}>
       <div className="pl-panel pl-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
         <div className="pl-modal__title">{title}</div>
         <div style={{ fontSize: 13.5, color: "var(--ink-dim)" }}>{body}</div>
@@ -21,7 +16,6 @@ export default function ConfirmDialog({ title, body, confirmLabel = "Confirm", d
           <button className={`pl-btn ${danger ? "pl-btn--danger" : ""}`} onClick={onConfirm} disabled={busy}>{confirmLabel}</button>
         </div>
       </div>
-    </div>,
-    document.body
+    </ModalOverlay>
   );
 }

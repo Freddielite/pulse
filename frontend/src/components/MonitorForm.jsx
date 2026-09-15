@@ -10,6 +10,23 @@ const DEFAULT_STEP = { method: "GET", url: "", expected_status: 200, body: "", b
 export default function MonitorForm({ monitor, existingGroups = [], onClose, onSaved, toast }) {
   useBodyScrollLock(true);
   const editing = !!monitor;
+  // Plays a closing animation before actually calling the real
+  // onClose/onSaved - this component is conditionally mounted by its
+  // caller ({adding && <MonitorForm .../>}), so unlike ConfirmDialog it
+  // can't rely on staying mounted through an external prop change (its
+  // internal state is seeded from `monitor` at first mount, and making
+  // that survive being reopened for a different monitor while already
+  // mounted isn't worth the risk for what this buys). Every close this
+  // component initiates itself - Cancel, backdrop click, a successful
+  // save - goes through this, so the exit animation covers the actual
+  // common cases; only an external force-close (logout mid-edit) skips
+  // it, which is fine since the logout transition covers the screen
+  // immediately after anyway.
+  const [closing, setClosing] = useState(false);
+  function requestClose(action) {
+    setClosing(true);
+    setTimeout(action, 180);
+  }
   const [name, setName] = useState(monitor?.name || "");
   const [url, setUrl] = useState(monitor?.url || "");
   const [monitorType, setMonitorType] = useState(
@@ -117,7 +134,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
         await createMonitor(payload);
         toast("Monitor added.");
       }
-      onSaved();
+      requestClose(onSaved);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -132,7 +149,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   // size/clip itself against .pl-page's box instead of the real viewport -
   // breaking the overlay's own scroll, not just chaining onto the body.
   return createPortal(
-    <div className="pl-overlay" onClick={onClose}>
+    <div className={`pl-overlay${closing ? " pl-overlay--closing" : ""}`} onClick={() => requestClose(onClose)}>
       <div className="pl-panel pl-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pl-modal__title">{editing ? "Edit monitor" : "Add a monitor"}</div>
         <form onSubmit={handleSubmit}>
@@ -404,7 +421,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
           )}
           {error && <div className="pl-error">{error}</div>}
           <div className="pl-modal__actions">
-            <button type="button" className="pl-btn pl-btn--ghost" onClick={onClose}>Cancel</button>
+            <button type="button" className="pl-btn pl-btn--ghost" onClick={() => requestClose(onClose)}>Cancel</button>
             <button type="submit" className="pl-btn" disabled={busy}>{busy ? "Saving..." : "Save"}</button>
           </div>
         </form>

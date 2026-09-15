@@ -12,6 +12,14 @@ import { useBodyScrollLock } from "../hooks/useBodyScrollLock.js";
 function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toast }) {
   useBodyScrollLock(true);
   const editing = !!page;
+  // See the identical closing-state comment in MonitorForm.jsx - same
+  // reasoning, same 180ms, same reason this can't just be ModalOverlay
+  // (internal state seeded from `page` at first mount).
+  const [closing, setClosing] = useState(false);
+  function requestClose(action) {
+    setClosing(true);
+    setTimeout(action, 180);
+  }
   const [name, setName] = useState(page?.name || "");
   const [mode, setMode] = useState(page?.group_name ? "group" : "manual");
   const [groupName, setGroupName] = useState(page?.group_name || existingGroups[0] || "");
@@ -66,7 +74,7 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
         await createStatusPage(payload);
         toast("Status page created.");
       }
-      onSaved();
+      requestClose(onSaved);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -79,7 +87,7 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
   // by the animation would otherwise reposition/clip this fixed
   // overlay - see the identical fix and reasoning in ConfirmDialog.jsx.
   return createPortal(
-    <div className="pl-overlay" onClick={onClose}>
+    <div className={`pl-overlay${closing ? " pl-overlay--closing" : ""}`} onClick={() => requestClose(onClose)}>
       <div className="pl-panel pl-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pl-modal__title">{editing ? "Edit status page" : "New status page"}</div>
         <form onSubmit={handleSubmit}>
@@ -134,7 +142,7 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
           )}
           {error && <div className="pl-error">{error}</div>}
           <div className="pl-modal__actions">
-            <button type="button" className="pl-btn pl-btn--ghost" onClick={onClose}>Cancel</button>
+            <button type="button" className="pl-btn pl-btn--ghost" onClick={() => requestClose(onClose)}>Cancel</button>
             <button type="submit" className="pl-btn" disabled={busy}>{busy ? "Saving..." : "Save"}</button>
           </div>
         </form>
@@ -299,16 +307,15 @@ export default function StatusPagesView({ monitors, existingGroups = [], pages, 
         />
       )}
 
-      {confirmingDeleteId && (
-        <ConfirmDialog
-          title="Delete this status page?"
-          body="The link will stop working immediately. This doesn't affect the monitors themselves or their individual share links."
-          confirmLabel={busyId === confirmingDeleteId ? "Deleting..." : "Delete"}
-          busy={busyId === confirmingDeleteId}
-          onConfirm={() => handleDelete(confirmingDeleteId)}
-          onCancel={() => setConfirmingDeleteId(null)}
-        />
-      )}
+      <ConfirmDialog
+        open={!!confirmingDeleteId}
+        title="Delete this status page?"
+        body="The link will stop working immediately. This doesn't affect the monitors themselves or their individual share links."
+        confirmLabel={busyId === confirmingDeleteId ? "Deleting..." : "Delete"}
+        busy={busyId === confirmingDeleteId}
+        onConfirm={() => handleDelete(confirmingDeleteId)}
+        onCancel={() => setConfirmingDeleteId(null)}
+      />
     </div>
   );
 }
