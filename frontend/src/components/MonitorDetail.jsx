@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { usePagedList } from "../hooks/usePagedList.js";
 import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare, getSecurityHistory, getSecurityEvents, acknowledgeSecurityEvent, getMonitorTls, getMonitorDns, runDnsCheck, getMonitorCertificates, runCertificateCheck, createMonitor, getOrganization, getCspViolations, clearCspViolations, getAuthScan, BASE } from "../api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
@@ -39,6 +40,7 @@ function formatDateTime(iso) {
 export default function MonitorDetail({ monitor, currentUser, existingGroups = [], onBack, onChanged, toast }) {
   const [checks, setChecks] = useState([]);
   const [incidents, setIncidents] = useState([]);
+  const incidentsPage = usePagedList(incidents);
   const [uptime, setUptime] = useState(null);
   const [dailyUptime, setDailyUptime] = useState([]);
   const [security, setSecurity] = useState(null);
@@ -720,19 +722,26 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
         {incidents.length === 0 ? (
           <div style={{ color: "var(--ink-dim)", fontSize: 13 }}>No incidents recorded. That's the goal.</div>
         ) : (
-          incidents.map((inc) => (
-            <div className="pl-incident-row" key={inc.id}>
-              <div className="pl-incident-row__main">
-                <div>{formatDateTime(inc.started_at)}</div>
-                <div className="pl-incident-row__error">{inc.error_message}</div>
+          <>
+            {incidentsPage.visible.map((inc) => (
+              <div className="pl-incident-row" key={inc.id}>
+                <div className="pl-incident-row__main">
+                  <div>{formatDateTime(inc.started_at)}</div>
+                  <div className="pl-incident-row__error">{inc.error_message}</div>
+                </div>
+                <div className="pl-incident-row__duration">
+                  {inc.resolved_at
+                    ? formatDuration(new Date(inc.resolved_at) - new Date(inc.started_at))
+                    : "Ongoing"}
+                </div>
               </div>
-              <div className="pl-incident-row__duration">
-                {inc.resolved_at
-                  ? formatDuration(new Date(inc.resolved_at) - new Date(inc.started_at))
-                  : "Ongoing"}
-              </div>
-            </div>
-          ))
+            ))}
+            {incidentsPage.hasMore && (
+              <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" style={{ marginTop: 10 }} onClick={incidentsPage.showMore}>
+                Show {Math.min(10, incidentsPage.remaining)} more ({incidentsPage.remaining} hidden)
+              </button>
+            )}
+          </>
         )}
       </div>
 

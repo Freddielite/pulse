@@ -200,6 +200,22 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Pagination on the monitor detail page's longest lists.** Incident
+  history (backend caps at 50), the security timeline (default 50), and
+  CSP violations (caps at 200) were all rendering their entire fetched
+  list at once - fine when there are a handful, an endless scroll once
+  a monitor's been running a while. New shared `usePagedList` hook
+  (`hooks/usePagedList.js`): purely client-side slicing of the array
+  that's already been fetched (and already bounded by the backend), not
+  real offset-based pagination against the API - there's nothing to
+  save by re-fetching in pages when the data's already sitting in
+  memory. Shows 10 at a time with a "Show N more (M hidden)" button.
+  `DomainPanels.jsx`'s certificate-transparency panel already had its
+  own show-all/show-fewer toggle for its (much shorter, deduped)
+  subdomain list and didn't need this; the raw checks array only ever
+  feeds the response-time chart, never rendered as individual rows, so
+  it didn't either.
+
 - **Security audit of last round's batch: three real findings, all
   fixed.**
   - **The encrypted authenticated-scan credential was being shipped to

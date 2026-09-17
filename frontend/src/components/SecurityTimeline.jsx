@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SEVERITY_STYLE } from "./SecurityScanPanel.jsx";
+import { usePagedList } from "../hooks/usePagedList.js";
 
 // Human labels for each detector's event kind. Kept as a lookup rather
 // than formatting the raw kind string, so a new detector shows up with a
@@ -33,6 +34,7 @@ function relativeTime(iso) {
 
 export default function SecurityTimeline({ events, onAcknowledge, canManage = true }) {
   const [acknowledgingId, setAcknowledgingId] = useState(null);
+  const eventsPage = usePagedList(events);
   if (!events) return null;
 
   async function handleAcknowledge(eventId) {
@@ -64,7 +66,7 @@ export default function SecurityTimeline({ events, onAcknowledge, canManage = tr
             here.
           </div>
         ) : (
-          events.map((event, index) => {
+          eventsPage.visible.map((event, index) => {
             const style = SEVERITY_STYLE[event.severity] || SEVERITY_STYLE.medium;
             return (
               <div
@@ -99,6 +101,11 @@ export default function SecurityTimeline({ events, onAcknowledge, canManage = tr
               </div>
             );
           })
+        )}
+        {eventsPage.hasMore && (
+          <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" style={{ marginTop: 10 }} onClick={eventsPage.showMore}>
+            Show {Math.min(10, eventsPage.remaining)} more ({eventsPage.remaining} hidden)
+          </button>
         )}
       </div>
     </>

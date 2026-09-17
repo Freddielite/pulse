@@ -1,3 +1,5 @@
+import { usePagedList } from "../hooks/usePagedList.js";
+
 function relativeTime(iso) {
   const diffMs = Date.now() - new Date(iso).getTime();
   const minutes = Math.round(diffMs / 60000);
@@ -20,6 +22,7 @@ function shorten(value, max = 60) {
 }
 
 export default function CspViolations({ violations, onClear, clearing, canManage = true }) {
+  const page = usePagedList(violations);
   if (!violations) return null;
 
   return (
@@ -41,7 +44,7 @@ export default function CspViolations({ violations, onClear, clearing, canManage
             isn't wired up yet, or that it is and nothing has tripped it - it's not itself a pass/fail check.
           </div>
         ) : (
-          violations.map((v, index) => (
+          page.visible.map((v, index) => (
             <div key={v.id} className="pl-finding-row" style={{ borderTop: index === 0 ? "none" : undefined }}>
               <div className="pl-finding-row__text">
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -65,6 +68,11 @@ export default function CspViolations({ violations, onClear, clearing, canManage
               </div>
             </div>
           ))
+        )}
+        {page.hasMore && (
+          <button type="button" className="pl-btn pl-btn--ghost pl-btn--sm" style={{ marginTop: 10 }} onClick={page.showMore}>
+            Show {Math.min(10, page.remaining)} more ({page.remaining} hidden)
+          </button>
         )}
       </div>
     </>
