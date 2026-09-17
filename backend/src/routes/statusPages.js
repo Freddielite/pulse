@@ -3,6 +3,7 @@ import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { generateShareToken } from "../lib/shareLinks.js";
 import { requireOrgRole } from "../lib/orgAccess.js";
+import { verifyCustomDomain, registerDomainWithVercel } from "../lib/customDomain.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -97,16 +98,84 @@ async function loadStatusPageForMutation(req, res) {
 router.patch("/:id", async (req, res) => {
   const page = await loadStatusPageForMutation(req, res);
   if (!page) return;
-  const { name, group_name, monitor_ids } = req.body;
+  const { name, group_name, monitor_ids, organization_id, custom_domain } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "name is required" });
   const selectionError = await validateSelection(req.userId, group_name, monitor_ids);
   if (selectionError) return res.status(400).json({ error: selectionError });
-  const { rows } = await pool.query(
-    `UPDATE status_pages SET name = $2, group_name = $3, monitor_ids = $4, updated_at = now()
-     WHERE id = $1 RETURNING *`,
-    [req.params.id, name.trim(), group_name?.trim() || null, monitor_ids?.length ? JSON.stringify(monitor_ids) : null]
-  );
-  res.json(rows[0]);
+  // Same narrower rule as monitors.js's identical reassignment gate:
+  // only the page's own creator can move it between personal and
+  // organization ownership at all, regardless of how broad
+  // loadStatusPageForMutation's own edit access is - an org admin who
+  // didn't create this particular page can edit its monitor list, but
+  // can't reassign it away from wherever its creator put it.
+  if (organization_id !== undefined) {
+    if (page.user_id !== req.userId) {
+      return res.status(403).json({ error: "only the status page's creator can move it between personal and organization ownership" });
+    }
+    if (organization_id) {
+      const allowed = await requireOrgRole(req.userId, organization_id, "admin");
+      if (!allowed) return res.status(403).json({ error: "you need admin access on that organization to move status pages into it" });
+    }
+  }
+  const normalizedDomain = custom_domain === undefined ? undefined : custom_domain?.trim().toLowerCase().replace(/^https?:\/\//, "") || null;
+  if (normalizedDomain && /[\s/]/.test(normalizedDomain)) {
+    return res.status(400).json({ error: "custom domain should be just the hostname, e.g. status.example.com" });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE status_pages SET
+         name = $2,
+         group_name = $3,
+         monitor_ids = $4,
+         -- Explicit-clear-is-valid, same pattern as monitors.js's own
+         -- organization_id handling: NULL genuinely means "make this
+         -- personal," which a plain COALESCE could never tell apart from
+         -- "field wasn't sent."
+         organization_id = CASE WHEN $5 THEN $6 ELSE organization_id END,
+         custom_domain = CASE WHEN $7 THEN $8 ELSE custom_domain END,
+         -- A changed domain string was never verified - whatever passed
+         -- before was for the OLD value. Only cleared when the domain
+         -- actually changes, not on every save of an unrelated field.
+         custom_domain_verified_at = CASE WHEN $7 AND $8 IS DISTINCT FROM custom_domain THEN NULL ELSE custom_domain_verified_at END,
+         updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [
+        req.params.id,
+        name.trim(),
+        group_name?.trim() || null,
+        monitor_ids?.length ? JSON.stringify(monitor_ids) : null,
+        organization_id !== undefined,
+        organization_id || null,
+        normalizedDomain !== undefined,
+        normalizedDomain,
+      ]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "that domain is already in use by another status page" });
+    console.error(err);
+    res.status(500).json({ error: "failed to update status page" });
+  }
+});
+
+// Checks the domain's DNS and, if it checks out, auto-registers it with
+// Vercel when credentials are configured (see lib/customDomain.js for
+// both halves of that). Doesn't require custom_domain to have just been
+// set - re-running this later (DNS was still propagating, or someone
+// wants to confirm nothing's broken) is exactly what it's for too.
+router.post("/:id/verify-domain", async (req, res) => {
+  const page = await loadStatusPageForMutation(req, res);
+  if (!page) return;
+  if (!page.custom_domain) return res.status(400).json({ error: "no custom domain set on this status page yet" });
+
+  const result = await verifyCustomDomain(page.custom_domain);
+  if (!result.verified) {
+    return res.json({ verified: false, reason: result.reason });
+  }
+
+  await pool.query(`UPDATE status_pages SET custom_domain_verified_at = now() WHERE id = $1`, [page.id]);
+  const vercel = await registerDomainWithVercel(page.custom_domain);
+  res.json({ verified: true, vercel });
 });
 
 // Same reasoning as monitors' /share/regenerate: swap the token in the

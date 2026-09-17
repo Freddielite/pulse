@@ -15,6 +15,8 @@ import { checkBlacklist, blacklistCheckConfigured } from "./blacklistCheck.js";
 import { recordSecurityEvent, diffScans } from "./securityEvents.js";
 import { wantsNotification } from "./notificationPrefs.js";
 import { getNotifiableUsers } from "./orgAccess.js";
+import { runAuthenticatedScan } from "./authScan.js";
+import { isCredentialEncryptionConfigured } from "./credentialCrypto.js";
 
 // How often the (best-effort, rate-limited) cert/domain check runs per
 // monitor. Far coarser than the uptime check: a handshake + WHOIS lookup
@@ -543,8 +545,73 @@ export async function scanAndRecord(monitor) {
 }
 
 // ---------------------------------------------------------------------
-// DNS sweep
+// Authenticated scan sweep (opt-in, separate cadence and separate
+// history table from the anonymous scan above - see db.js's
+// auth_scans comment for why)
 // ---------------------------------------------------------------------
+
+const AUTH_SCAN_INTERVAL_HOURS = 24;
+const MAX_AUTH_SCANS_PER_RUN = 20;
+
+export async function runAuthScanSweep({ userId = null, limit = MAX_AUTH_SCANS_PER_RUN } = {}) {
+  // Not just an optimization - if the encryption key was ever unset
+  // after monitors had already opted in (a redeploy with a missing env
+  // var, say), this is what stops the sweep from grinding through every
+  // one of them re-discovering the same decrypt failure every cycle.
+  if (!isCredentialEncryptionConfigured()) return 0;
+
+  const conditions = [
+    `active = true`,
+    `auth_scan_enabled = true`,
+    `auth_scan_credential IS NOT NULL`,
+    `(auth_scanned_at IS NULL OR auth_scanned_at <= now() - interval '${AUTH_SCAN_INTERVAL_HOURS} hours')`,
+  ];
+  const params = [];
+  if (userId) {
+    params.push(userId);
+    conditions.push(`user_id = $${params.length}`);
+  }
+  params.push(limit);
+
+  const { rows: due } = await pool.query(`SELECT * FROM monitors WHERE ${conditions.join(" AND ")} LIMIT $${params.length}`, params);
+
+  let scansRun = 0;
+  for (const monitor of due) {
+    await runAndRecordAuthScan(monitor);
+    scansRun += 1;
+  }
+  return scansRun;
+}
+
+// Same "run once, share between the sweep and the manual button" shape
+// as scanAndRecord above.
+export async function runAndRecordAuthScan(monitor) {
+  const { rows: previousRows } = await pool.query(`SELECT findings FROM auth_scans WHERE monitor_id = $1 ORDER BY scanned_at DESC LIMIT 1`, [monitor.id]);
+  const previousFindings = previousRows[0]?.findings || null;
+
+  const result = await runAuthenticatedScan(monitor);
+
+  const { rows } = await pool.query(
+    `INSERT INTO auth_scans (monitor_id, score, findings) VALUES ($1, $2, $3) RETURNING *`,
+    [monitor.id, result.score, JSON.stringify(result.findings)]
+  );
+  await pool.query(`UPDATE monitors SET auth_scanned_at = now() WHERE id = $1`, [monitor.id]);
+
+  const { regressions } = diffScans(previousFindings, result.findings);
+  for (const regression of regressions) {
+    await recordSecurityEvent(monitor, {
+      kind: "auth_scan_regression",
+      severity: regression.severity,
+      title: `[authenticated scan] ${regression.check} went from passing to failing`,
+      detail: regression.detail,
+      data: { check: regression.check, category: regression.category, remediation: regression.remediation },
+      dedupeKey: `auth:${regression.check}`,
+    });
+  }
+
+  return rows[0];
+}
+
 
 // Cheap enough (a handful of UDP lookups, no HTTP) to run on a much
 // tighter cadence than the scan sweep. Drift is the signal here where

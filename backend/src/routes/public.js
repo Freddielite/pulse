@@ -156,6 +156,23 @@ async function resolveBranding(organizationId) {
   return rows[0] || null;
 }
 
+// Lets the frontend figure out "is this hostname actually a status
+// page's custom domain" for any URL it's loaded from, without needing
+// to know in advance which domains are custom ones - it just asks this
+// on every load and gets a 404 for its own normal domain. Only matches
+// a VERIFIED domain: an unverified custom_domain is just a value
+// someone typed in, not proof they actually control that hostname, and
+// matching on it would let anyone claim routing for a domain they don't
+// own by typing it into a status page they control.
+router.get("/status-pages/by-domain/:hostname", async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT share_token FROM status_pages WHERE custom_domain = $1 AND custom_domain_verified_at IS NOT NULL`,
+    [req.params.hostname.toLowerCase()]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "no status page for that domain" });
+  res.json({ share_token: rows[0].share_token });
+});
+
 router.get("/status-pages/:token", async (req, res) => {
   const page = await findStatusPageByToken(req.params.token);
   if (!page) return res.status(404).json(NOT_FOUND);

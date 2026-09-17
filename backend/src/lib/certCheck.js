@@ -1,5 +1,6 @@
 import tls from "node:tls";
 import { lookup as whoisLookup } from "whois";
+import { registrableRoot } from "./dnsCheck.js";
 
 // Reads the full TLS posture off one handshake: not just the expiry date
 // but the negotiated protocol and cipher, the key, the issuer, the SAN
@@ -208,10 +209,15 @@ function normalizeDateString(raw) {
 }
 
 export function getDomainExpiry(hostname) {
-  // Strip to the registrable root. A WHOIS server has no record for
-  // "api.example.com", only "example.com".
-  const parts = hostname.split(".");
-  const root = parts.length > 2 ? parts.slice(-2).join(".") : hostname;
+  // Strip to the registrable root - a WHOIS server has no record for
+  // "api.example.com", only "example.com". Shared with dnsCheck.js
+  // rather than duplicated, since this used to be its own "last two
+  // labels" guess that gave a different (and differently wrong) answer
+  // than the other copy for the exact domains that need a real Public
+  // Suffix List lookup - a .com.ng or .co.uk domain was getting WHOIS'd
+  // against a fabricated root either way, just not always the SAME
+  // fabricated root in both places.
+  const root = registrableRoot(hostname);
 
   return new Promise((resolve, reject) => {
     // follow defaults to 2 in the whois package itself, so referral

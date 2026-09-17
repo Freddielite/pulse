@@ -4,6 +4,7 @@ import App from "./App.jsx";
 import SharedMonitorView from "./components/SharedMonitorView.jsx";
 import SharedStatusPageView from "./components/SharedStatusPageView.jsx";
 import VerifyEmail from "./components/VerifyEmail.jsx";
+import { getStatusPageByDomain } from "./api.js";
 import "./App.css";
 
 // Belt-and-braces for the "no copying UI text" behavior set up in
@@ -72,19 +73,44 @@ const shareMatch = window.location.hash.match(/^#\/share\/(.+)$/);
 const statusPageMatch = window.location.hash.match(/^#\/status\/(.+)$/);
 const verifyMatch = window.location.hash.match(/^#\/verify-email\?token=(.+)$/);
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    {shareMatch ? (
-      <SharedMonitorView token={decodeURIComponent(shareMatch[1])} />
-    ) : statusPageMatch ? (
-      <SharedStatusPageView token={decodeURIComponent(statusPageMatch[1])} />
-    ) : verifyMatch ? (
-      <VerifyEmail token={decodeURIComponent(verifyMatch[1])} />
-    ) : (
-      <App />
-    )}
-  </React.StrictMode>
-);
+// A fourth kind of entry point, checked by hostname rather than hash: a
+// status page's own custom domain (status.client.com) should show that
+// page directly at the root, with no token or hash needed in the URL at
+// all - that's the entire point of a custom domain existing. There's no
+// way to know in advance which hostnames are custom domains, so this
+// just asks on every load that isn't already one of the three hash
+// routes above (which always take priority) and treats a 404 as "this
+// is just the app's own normal domain," which is the overwhelmingly
+// common case. Skipped for localhost so local development doesn't fire
+// a doomed request on every reload.
+async function resolveCustomDomainToken() {
+  if (shareMatch || statusPageMatch || verifyMatch) return null;
+  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") return null;
+  try {
+    const result = await getStatusPageByDomain(window.location.hostname);
+    return result.share_token;
+  } catch {
+    return null;
+  }
+}
+
+resolveCustomDomainToken().then((customDomainToken) => {
+  ReactDOM.createRoot(document.getElementById("root")).render(
+    <React.StrictMode>
+      {shareMatch ? (
+        <SharedMonitorView token={decodeURIComponent(shareMatch[1])} />
+      ) : statusPageMatch ? (
+        <SharedStatusPageView token={decodeURIComponent(statusPageMatch[1])} />
+      ) : verifyMatch ? (
+        <VerifyEmail token={decodeURIComponent(verifyMatch[1])} />
+      ) : customDomainToken ? (
+        <SharedStatusPageView token={customDomainToken} />
+      ) : (
+        <App />
+      )}
+    </React.StrictMode>
+  );
+});
 
 // Splash screen lives in index.html so it's visible before this file
 // even finishes loading. Once React has painted the real UI, fade it

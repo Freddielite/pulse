@@ -59,7 +59,9 @@ curls the same URL works identically.
 | `TELEGRAM_CHAT_ID` | Optional, for Telegram | Hardcodes a single destination chat for the whole deployment. Simplest setup for a single-user instance - set this and skip per-user chat IDs entirely. If unset, falls back to each user's own `telegram_chat_id` (see below), for deployments with more than one account. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | For blacklist checks | Free from the Google Cloud Console (enable the Safe Browsing API). Without it, `blacklist_status` stays `NULL` on every monitor rather than reading as a false "clean" - see lib/blacklistCheck.js. |
 | `HIBP_API_KEY` | For breach monitoring | Paid subscription key from [haveibeenpwned.com/API/Key](https://haveibeenpwned.com/API/Key) - HIBP gated this endpoint in 2019, there's no free tier. Without it, breach monitoring silently never runs even if a user turns the toggle on - see lib/breachCheck.js. |
-| `FRONTEND_URL` | Optional, for org invite emails | Where the invite email tells someone to go log in or sign up. Without it, the email just says "log into Pulse" / "sign up for Pulse" with no link - still useful, just not clickable. |
+| `FRONTEND_URL` | Yes | Required, not just "nice to have," as of email-verified signup: it's the only way a confirmation link can be built at all, and index.js warns loudly at boot in production if it's missing. Also used for org invite emails (falls back to a non-clickable "log into Pulse" there specifically if unset - that one feature alone would tolerate it being missing, signup won't). |
+| `CREDENTIAL_ENCRYPTION_KEY` | For authenticated scanning | A base64-encoded 32-byte key (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`) for encrypting the session cookie/bearer token a monitor owner provides for authenticated scanning - see lib/credentialCrypto.js. Deliberately has no insecure fallback the way SESSION_SECRET/CRON_SECRET do: without this set, authenticated scanning simply refuses to enable at all (routes/monitors.js's auth-scan-config route returns a clear error) rather than storing a credential some other way. |
+| `VERCEL_API_TOKEN` / `VERCEL_PROJECT_ID` / `VERCEL_TEAM_ID` | Optional, for custom domain automation | When all set (team ID only needed if the Vercel project is under a team, not a personal account), verifying a status page's custom domain also automatically registers it with the frontend's Vercel project via their API - see lib/customDomain.js. Without these, DNS verification still works, it just tells the org owner to add the domain in the Vercel dashboard themselves (Project -> Settings -> Domains) as the one remaining manual step. |
 
 The original DNS/TLS/CT posture features still need nothing beyond what
 was already required - DNS uses the system resolver, TLS is a plain
@@ -140,13 +142,10 @@ default, not a broken one.
   checked so one unavailable third party can't jam the same monitor
   forever, and moves on. A CT lookup being down is not an event worth
   alerting anyone about.
-- **The registrable-root heuristic is wrong for multi-part suffixes.**
-  `registrableRoot()` in `lib/dnsCheck.js` takes the last two labels,
-  which is right for `example.com` and wrong for `example.co.uk` or
-  `example.com.ng` - it would look up `co.uk`. This is the same
-  simplification `getDomainExpiry()` has always made. Fixing it properly
-  means shipping the Public Suffix List, which is a dependency plus a
-  data file that goes stale; it's a deliberate trade, not an oversight.
+- **The registrable-root heuristic now uses the actual Public Suffix
+  List** (the `psl` package) instead of a "last two labels" guess - see
+  Recent changes. Correctly handles `example.co.uk`, `example.com.ng`,
+  IP addresses, and unlisted hosts like `localhost` now.
 - **The auth-required assertion can't run on a monitor that's down.** It
   only runs on the passing branch of a check, because "does this endpoint
   still refuse anonymous callers" is unanswerable when the endpoint isn't
@@ -155,10 +154,9 @@ default, not a broken one.
   it as down (401 != expected 200) and the probe will never run. Give the
   monitor its auth header, or set `expected_status` to what the
   authenticated request actually returns.
-- **Subdomain takeover detection is signature-based.** It covers the 8
-  platforms whose "nothing is configured here" pages are recognizable
-  (GitHub Pages, Heroku, S3, Netlify, Vercel, Shopify, Fastly, Azure). A
-  dangling CNAME to anything else won't be flagged, and an unreachable
+- **Subdomain takeover detection is signature-based, now covering 18
+  platforms** (up from 8 - see Recent changes). A dangling CNAME to
+  anything not on that list still won't be flagged, and an unreachable
   host is treated as inconclusive rather than as a takeover - a dangling
   record and a temporarily down host look identical from outside, and
   reporting the second as the first would be a frightening false
@@ -172,24 +170,20 @@ default, not a broken one.
   because it's easy to misread "members have less power" as broader
   than it is: a member's own notification prefs, 2FA, webhook URL, etc.
   are theirs regardless of org role.
-- **A status page still can't be moved between personal and org
-  ownership after creation** (monitors can now - see "Recent changes").
-  `status_pages.organization_id` is set once, at creation, through the
-  create form's "Owner" selector - the same PATCH-side reassignment
-  monitors just got would extend directly if this is ever needed.
-- **`custom_domain` on an organization is a stored reminder, not
-  automation.** Typing one in doesn't route anything - actually serving
-  a client's own domain still needs a CNAME on their end and host
-  routing/TLS on this app's end.
-- **Scheduled authenticated deep-scans are still not built.** Everything
-  the scanner does today runs unauthenticated and read-only against
-  whatever a normal visitor can reach. A scan that logs in and checks for
-  things like broken access control between roles is a genuinely
-  different feature - it needs an explicit per-monitor opt-in and
-  consent step (this is the one thing in the app that would act *as* the
-  site owner rather than just observe from outside), a place to store
-  credentials/session state safely, and its own scheduling separate from
-  the passive scan. Deliberately not folded into this round.
+- **A status page's custom domain requires DNS verification before it
+  routes anything** (see Recent changes' "Custom domain automation") -
+  an unverified `custom_domain` value is just text someone typed in,
+  deliberately not enough on its own to claim routing for a hostname.
+  Full automation additionally needs `VERCEL_API_TOKEN`/
+  `VERCEL_PROJECT_ID` configured; without them, the last step (adding
+  the domain to the Vercel project) is manual.
+- **Authenticated scanning only checks what it's explicitly told to.**
+  It verifies paths the monitor owner lists as "should require login"
+  actually do, and re-runs the passive scan's own checks with a provided
+  credential attached - it never explores, enumerates endpoints, or
+  infers what might be protected. That's a deliberate scope boundary,
+  not a gap: broader automated probing of a logged-in area is a
+  meaningfully different (and riskier) feature than what got built.
 - **The secret scanner only catches a credential sitting in a bundle as
   a literal matching string.** A key assembled at runtime (fetched from
   another endpoint, built from pieces, base64-wrapped) won't match, and
@@ -205,6 +199,124 @@ default, not a broken one.
   cap with distinct-looking rows for what's really one problem.
 
 ## Recent changes
+
+- **Security audit of last round's batch: three real findings, all
+  fixed.**
+  - **The encrypted authenticated-scan credential was being shipped to
+    the browser** on every monitor list/create/update/snooze response -
+    all of those use `SELECT */RETURNING *`, which included
+    `auth_scan_credential` (ciphertext, never plaintext, but credential
+    material has no reason to ever reach a browser regardless). New
+    `stripAuthCredential()`/`stripAuthCredentialFromList()` in
+    `monitors.js`, applied at every response site that sends a full
+    monitor row - the dedicated auth-scan-config route already returned
+    an explicit column list that never included it.
+  - **Authenticated-scan results were readable by any org member with
+    read access to the monitor, not just admins.** Unlike the anonymous
+    scan (whose findings are about what's already public, so any member
+    seeing them costs nothing), an authenticated scan's findings
+    describe a restricted area - whatever the provided credential can
+    reach - which not every member is automatically entitled to know
+    facts about. `GET /:id/auth-scan` now uses the same admin+/creator
+    gate as configuring the scan in the first place, not the broadened
+    member-read access every other GET in this file uses. Frontend:
+    `MonitorDetail.jsx`'s fetch for this now `.catch(() => null)`s
+    specifically because of that access change - a plain member hitting
+    the new 403 would otherwise fail the whole page's data load, not
+    just that one panel.
+  - **No cap on how many "protected paths" could be listed per
+    monitor.** Every path gets a real outbound request on every
+    scheduled scan; an unbounded list turned one scan into an
+    accidental hammering of the monitor's own site (or a slow-moving
+    cron tick). Capped at 25 in `monitors.js`'s auth-scan-config route.
+  - Everything else specific to the new surface - SSRF protection on
+    the path-check requests, the credential never appearing in error
+    text/logs, the Vercel API token never being attacker-influenced,
+    header-injection risk from a malformed credential (self-inflicted at
+    worst, since only the monitor's own owner ever provides it, and
+    caught by the same try/catch every outbound request here already
+    has) - checked out already covered or acceptably low-severity.
+
+- **All five items from the backlog roadmap, in one batch: Public Suffix
+  List, more takeover signatures, status page org-reassignment, custom
+  domain automation, and authenticated scanning.**
+
+  - **Public Suffix List.** New `psl` dependency. `registrableRoot()` in
+    `dnsCheck.js` now correctly handles `.co.uk`/`.com.ng`-shaped
+    domains, IP addresses (no registrable-domain concept applies), and
+    unlisted hosts like `localhost` (falls back to the hostname itself).
+    `certCheck.js`'s `getDomainExpiry()` had its own separate "last two
+    labels" guess - removed in favor of calling the same shared
+    function, so there's one answer for "what's the root," not two
+    different wrong ones.
+
+  - **Subdomain-takeover signatures: 8 platforms to 18.** Added
+    Bitbucket, WordPress.com, Surge.sh, Tumblr, Zendesk, UserVoice,
+    Ghost(Pro), Pantheon, ReadMe, and Intercom to `dnsCheck.js`'s
+    `TAKEOVER_SIGNATURES`, each with the same publicly-documented
+    "nothing configured here" fingerprint every subdomain-takeover
+    scanner already draws from.
+
+  - **Status pages can now move between personal/org ownership after
+    creation.** Mirrors the fix monitors already had: `PATCH
+    /api/status-pages/:id` accepts `organization_id` (creator-only,
+    admin+ required on the target org), and the edit form's "Owner"
+    selector works on edit now, not just create.
+
+  - **Custom domain automation**, moved from the organization level to
+    the status-page level in the process - a domain belongs to one
+    specific status page, not to a whole org that might manage several
+    different clients' pages. New `custom_domain`/
+    `custom_domain_verified_at` columns on `status_pages`
+    (`organizations.custom_domain` stays in place, unused, rather than a
+    destructive drop). `POST /api/status-pages/:id/verify-domain`
+    (`lib/customDomain.js`) checks the domain's CNAME actually points at
+    `cname.vercel-dns.com`, and - only when `VERCEL_API_TOKEN`/
+    `VERCEL_PROJECT_ID` are configured - automatically registers the
+    verified domain with the frontend's Vercel project via their REST
+    API. Without those env vars, verification still works, it just asks
+    the org owner to add the domain in the Vercel dashboard themselves
+    as the one remaining manual step (Vercel only serves traffic for a
+    hostname once the *project* has claimed it, regardless of where DNS
+    points - no way around that from outside Vercel's own API). New
+    public `GET /api/public/status-pages/by-domain/:hostname` (only
+    matches a *verified* domain, never an unverified one someone just
+    typed in) lets the frontend figure out "is this hostname actually a
+    custom domain" on load - `main.jsx` now checks this before falling
+    through to the normal app, so a verified custom domain shows that
+    status page directly at the root, no token needed in the URL.
+
+  - **Scheduled authenticated deep-scans**, scoped deliberately
+    conservatively - this is the one feature in the app that acts *as*
+    a logged-in user rather than just observing from outside, so the
+    scope boundary matters as much as the feature itself. What it does:
+    (1) checks that paths the monitor owner explicitly lists as "should
+    require login" actually get rejected when hit anonymously, flagging
+    any that unexpectedly don't; (2) re-runs the exact same passive
+    checks the free scan already does (header grading, exposed paths,
+    secret scanning) but with a provided credential attached, since
+    that's the one thing an anonymous scan structurally can't see for
+    itself. What it deliberately does NOT do: automate an actual login
+    (the owner provides a session cookie or bearer token copied from
+    their own browser, never a username/password Pulse would submit
+    through a login form), guess at which paths might be protected,
+    enumerate endpoints, or attempt anything that resembles active
+    exploitation. New `lib/credentialCrypto.js` (AES-256-GCM, fails
+    closed with no insecure fallback if `CREDENTIAL_ENCRYPTION_KEY`
+    isn't configured - unlike a password or API token, this has to be
+    *reversible* to actually send back out on the next scan, so hashing
+    isn't an option). New `lib/authScan.js`, new `auth_scans` history
+    table (kept separate from `security_scans` - different population,
+    would make the trend chart jump around otherwise), new
+    `auth_scan_enabled`/`auth_scan_credential`/
+    `auth_scan_protected_paths`/`auth_scan_consent_at`/`auth_scanned_at`
+    columns on `monitors`. Scheduled via the same cron-tick sweep
+    pattern as every other check (`runAuthScanSweep`, 24h cadence, opt-
+    in only). Three new routes on `monitors.js`
+    (`PATCH .../auth-scan-config`, `GET`/`POST .../auth-scan`), and a
+    new `AuthenticatedScanPanel.jsx` on the frontend that *is* the
+    consent flow - explains what's being asked for and why before
+    showing the credential fields, never auto-enables anything.
 
 - **DNS-change alerts now check whether the new IP still belongs to the
   same network before treating it as urgent.** Prompted by a real case:
@@ -1396,8 +1508,8 @@ default suite.
   (member could edit/delete an existing org monitor) was closed in a
   later pass - see "Member role is now actually enforced..." further up.
 - ~~White-labeled client reports & branded status pages~~ - done;
-  `custom_domain` is a stored reminder field, not actual DNS/routing
-  automation.
+  `custom_domain` (now per-status-page, see Recent changes) is fully
+  wired up with DNS verification and optional Vercel API automation.
 - ~~Trend/history dashboard~~ - done (`SecurityTrendChart.jsx`).
 - ~~Embeddable trust badge~~ - done (`/api/public/monitors/:token/badge.svg`).
 
@@ -1409,33 +1521,18 @@ default suite.
   `scanner.js`), see "Tier 3" above.
 - ~~CSP violation ingestion endpoint~~ - done (`routes/public.js`'s
   `/csp-report`), see "Tier 3" above.
-- **Scheduled authenticated deep-scans, opt-in per monitor.** Everything
-  today is unauthenticated/outside-in by design, which is itself a
-  selling point ("safe to point at a client's prod site without asking
-  first"). Deeper coverage - authenticated endpoint enumeration,
-  business-logic checks - would need its own explicit consent flow, kept
-  separate from the default suite so that guarantee never gets
-  compromised for existing monitors.
-- **Move a status page between personal/org ownership after creation.**
-  Monitors can do this now (`PATCH /api/monitors/:id` accepts
-  `organization_id`); status pages still can't - the same reassignment
-  logic would extend directly to `PATCH /api/status-pages/:id`. See
-  Known limitations.
-- **`custom_domain` automation.** Currently a stored reminder field on an
-  organization, not functional - typing one in doesn't route anything.
-  Making it real needs a CNAME on the client's end plus host
-  routing/TLS handling on this app's end (likely a per-domain cert via
-  Let's Encrypt, and something to route an incoming request by Host
-  header to the right org's branding). See Known limitations.
-- **Public Suffix List for the registrable-root heuristic.** Both
-  `dnsCheck.js`'s subdomain-takeover check and the domain-expiry lookup
-  take "last two labels" as the registrable root, which is wrong for
-  `example.co.uk`/`example.com.ng`-shaped domains. Fixing it properly
-  means shipping the PSL as a dependency plus a data file that goes
-  stale over time - a deliberate trade so far, not an oversight. See
-  Known limitations.
-- **More subdomain-takeover signatures.** Currently covers the 8
-  platforms whose "nothing is configured here" page is recognizable
-  (GitHub Pages, Heroku, S3, Netlify, Vercel, Shopify, Fastly, Azure). A
-  dangling CNAME to any other platform won't be flagged. See Known
-  limitations.
+- ~~Scheduled authenticated deep-scans, opt-in per monitor~~ - done, see
+  "Authenticated scanning" in Recent changes above. Scoped conservatively
+  on purpose: verifies explicitly-listed "should require login" paths
+  actually do, and re-runs the existing passive checks with a provided
+  session cookie/bearer token attached - never automated login,
+  endpoint enumeration, or anything exploitation-adjacent.
+- ~~Move a status page between personal/org ownership after creation~~ -
+  done, mirrors the monitor fix - see Recent changes above.
+- ~~`custom_domain` automation~~ - done, see "Custom domain automation"
+  in Recent changes above. Moved from the organization level to the
+  status-page level in the process (see Known limitations for why).
+- ~~Public Suffix List for the registrable-root heuristic~~ - done (the
+  `psl` package), see Recent changes above.
+- ~~More subdomain-takeover signatures~~ - expanded from 8 to 18
+  platforms, see Recent changes above.

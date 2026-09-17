@@ -69,6 +69,9 @@ export const acknowledgeSecurityEvent = (id, eventId) =>
   apiFetch(`/monitors/${id}/security/events/${eventId}/acknowledge`, { method: "POST" });
 export const getCspViolations = (id) => apiFetch(`/monitors/${id}/csp-violations`);
 export const clearCspViolations = (id) => apiFetch(`/monitors/${id}/csp-violations`, { method: "DELETE" });
+export const updateAuthScanConfig = (id, payload) => apiFetch(`/monitors/${id}/auth-scan-config`, { method: "PATCH", body: JSON.stringify(payload) });
+export const getAuthScan = (id) => apiFetch(`/monitors/${id}/auth-scan`);
+export const runAuthScan = (id) => apiFetch(`/monitors/${id}/auth-scan`, { method: "POST" });
 
 export const getMonitorTls = (id) => apiFetch(`/monitors/${id}/tls`);
 export const getMonitorDns = (id) => apiFetch(`/monitors/${id}/dns`);
@@ -97,6 +100,8 @@ export const updateStatusPage = (id, payload) => apiFetch(`/status-pages/${id}`,
 export const regenerateStatusPage = (id) => apiFetch(`/status-pages/${id}/regenerate`, { method: "POST" });
 export const deleteStatusPage = (id) => apiFetch(`/status-pages/${id}`, { method: "DELETE" });
 export const getSharedStatusPage = (token) => apiFetch(`/public/status-pages/${token}`);
+export const getStatusPageByDomain = (hostname) => apiFetch(`/public/status-pages/by-domain/${hostname}`);
+export const verifyStatusPageDomain = (id) => apiFetch(`/status-pages/${id}/verify-domain`, { method: "POST" });
 
 // Unauthenticated reads behind a monitor's share link - same apiFetch
 // wrapper (sending a session cookie here is harmless, just unnecessary),

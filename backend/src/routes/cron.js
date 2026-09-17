@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
-import { runUptimeChecks, runCertSweep, runSecuritySweep, runDnsSweep, runCtSweep } from "../lib/checkRunner.js";
+import { runUptimeChecks, runCertSweep, runSecuritySweep, runDnsSweep, runCtSweep, runAuthScanSweep } from "../lib/checkRunner.js";
 import { runDigestSweep } from "../lib/digest.js";
 import { runBreachSweep } from "../lib/breachCheck.js";
 
@@ -86,8 +86,13 @@ router.all("/tick", requireCronSecret, async (req, res) => {
     // digest sweep right above it - see runBreachSweep for why it's
     // safe to call on every tick regardless.
     const breachesChecked = await runBreachSweep();
+    // Opt-in and, on top of that, only runs at all when
+    // CREDENTIAL_ENCRYPTION_KEY is configured - a no-op sweep costs one
+    // cheap SELECT on every tick for any deployment that hasn't turned
+    // this on, same "safe to always call" shape as the sweeps above.
+    const authScans = await runAuthScanSweep();
 
-    res.json({ ...uptimeResults, certChecks, securityScans, dnsChecks, ctChecks, digestsSent, breachesChecked });
+    res.json({ ...uptimeResults, certChecks, securityScans, dnsChecks, ctChecks, digestsSent, breachesChecked, authScans });
   } finally {
     await client.query("SELECT pg_advisory_unlock($1)", [TICK_LOCK_KEY]).catch(() => {});
     client.release();

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusPage, listOrganizations } from "../api.js";
+import { createStatusPage, updateStatusPage, regenerateStatusPage, deleteStatusPage, listOrganizations, verifyStatusPageDomain } from "../api.js";
 import { createPortal } from "react-dom";
 import Dropdown from "./Dropdown.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
@@ -26,15 +26,22 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
   const [monitorIds, setMonitorIds] = useState(new Set(page?.monitor_ids || []));
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  // Same creation-only org assignment as MonitorForm - see that
-  // component's comment for why this isn't offered on edit.
+  // Same reassignable-on-edit behavior as MonitorForm now has - see
+  // that component's identical comment for the "current org might not
+  // be one this user can move things INTO" reasoning.
   const [organizations, setOrganizations] = useState([]);
-  const [organizationId, setOrganizationId] = useState("");
+  const [organizationId, setOrganizationId] = useState(page?.organization_id || "");
+  const [customDomain, setCustomDomain] = useState(page?.custom_domain || "");
+  const [domainVerifying, setDomainVerifying] = useState(false);
+  const [domainStatus, setDomainStatus] = useState(null);
 
   useEffect(() => {
-    if (editing) return;
     listOrganizations()
-      .then((orgs) => setOrganizations(orgs.filter((o) => o.role === "owner" || o.role === "admin")))
+      .then((orgs) => {
+        const selectable = orgs.filter((o) => o.role === "owner" || o.role === "admin");
+        const current = orgs.find((o) => o.id === page?.organization_id);
+        setOrganizations(current && !selectable.some((o) => o.id === current.id) ? [...selectable, current] : selectable);
+      })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -64,7 +71,13 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
       name: name.trim(),
       group_name: mode === "group" ? groupName : null,
       monitor_ids: mode === "manual" ? [...monitorIds] : null,
-      organization_id: !editing && organizationId ? organizationId : undefined,
+      organization_id: organizationId !== (page?.organization_id || "") ? organizationId || null : undefined,
+      // Edit-only, like the Owner reassignment above - setting one at
+      // creation time before the page (and its share link) even exists
+      // isn't a real use case, and keeping it out of the create payload
+      // means routes/statusPages.js's POST route doesn't need to know
+      // about it at all.
+      custom_domain: editing && customDomain.trim() !== (page?.custom_domain || "") ? customDomain.trim() || null : undefined,
     };
     try {
       if (editing) {
@@ -82,6 +95,34 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
     }
   }
 
+  // Only meaningful against whatever's actually SAVED (routes/
+  // statusPages.js checks page.custom_domain, not anything still sitting
+  // unsaved in the input) - the button below is disabled unless the
+  // field matches what's on the page already, so this never runs
+  // against a value the backend doesn't know about yet.
+  async function handleVerifyDomain() {
+    setDomainVerifying(true);
+    setDomainStatus(null);
+    try {
+      const result = await verifyStatusPageDomain(page.id);
+      if (result.verified) {
+        const vercelNote = result.vercel?.attempted
+          ? result.vercel.added
+            ? "Verified, and automatically added to Vercel."
+            : `Verified, but adding it to Vercel failed (${result.vercel.error}) - add it manually in your Vercel project's Settings -> Domains.`
+          : "Verified. Add this domain in your Vercel project's Settings -> Domains to finish - this instance isn't configured to do that automatically (set VERCEL_API_TOKEN/VERCEL_PROJECT_ID to enable it).";
+        setDomainStatus({ ok: true, message: vercelNote });
+        toast("Domain verified.");
+      } else {
+        setDomainStatus({ ok: false, message: result.reason });
+      }
+    } catch (err) {
+      setDomainStatus({ ok: false, message: err.message });
+    } finally {
+      setDomainVerifying(false);
+    }
+  }
+
   // Portal to <body>: this view lives inside .pl-page (the animated
   // page-transition wrapper), and a transform left on that ancestor
   // by the animation would otherwise reposition/clip this fixed
@@ -95,7 +136,7 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
             <label>Name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wyntek clients" required autoFocus />
           </div>
-          {!editing && organizations.length > 0 && (
+          {organizations.length > 0 && (
             <div className="pl-field">
               <label>Owner</label>
               <Dropdown
@@ -103,6 +144,38 @@ function StatusPageForm({ page, monitors, existingGroups, onClose, onSaved, toas
                 onChange={setOrganizationId}
                 options={[{ value: "", label: "Just me (personal)" }, ...organizations.map((org) => ({ value: org.id, label: org.name }))]}
               />
+            </div>
+          )}
+          {editing && (
+            <div className="pl-field">
+              <label>Custom domain (optional)</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={customDomain}
+                  onChange={(e) => {
+                    setCustomDomain(e.target.value);
+                    setDomainStatus(null);
+                  }}
+                  placeholder="status.yourclient.com"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="pl-btn pl-btn--ghost pl-btn--sm"
+                  disabled={domainVerifying || !customDomain.trim() || customDomain.trim() !== (page?.custom_domain || "")}
+                  onClick={handleVerifyDomain}
+                >
+                  {domainVerifying ? "Checking..." : "Verify"}
+                </button>
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>
+                {customDomain.trim() && customDomain.trim() !== (page?.custom_domain || "")
+                  ? "Save first, then Verify becomes available."
+                  : `Point a CNAME for this domain at cname.vercel-dns.com, then hit Verify.${page?.custom_domain_verified_at ? " Currently verified." : ""}`}
+              </div>
+              {domainStatus && (
+                <div style={{ fontSize: 12, marginTop: 6, color: domainStatus.ok ? "var(--signal)" : "var(--alert)" }}>{domainStatus.message}</div>
+              )}
             </div>
           )}
           <div className="pl-field">

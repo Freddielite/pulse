@@ -1,15 +1,38 @@
 import { Router } from "express";
 import { pool } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { runUptimeChecks, scanAndRecord, runDnsSweep, runCtSweep } from "../lib/checkRunner.js";
+import { runUptimeChecks, scanAndRecord, runDnsSweep, runCtSweep, runAndRecordAuthScan } from "../lib/checkRunner.js";
 import { parseAcceptedStatuses } from "../lib/authProbe.js";
 import { generateShareToken } from "../lib/shareLinks.js";
 import { requireOrgRole, logOrgAction } from "../lib/orgAccess.js";
 import { assertPublicHttpUrl, assertPublicHost } from "../lib/urlSafety.js";
 import { parseTcpTarget } from "../lib/tcpCheck.js";
+import { encryptCredential, isCredentialEncryptionConfigured } from "../lib/credentialCrypto.js";
 
 const router = Router();
 router.use(requireAuth);
+
+// Every general-purpose monitor response below uses SELECT */RETURNING
+// * for simplicity, which also happens to include auth_scan_credential
+// - the *encrypted* blob, never plaintext, but there's still no reason
+// for it to leave the server at all. The frontend never decrypts it
+// itself (only lib/authScan.js does, server-side, right before use),
+// so shipping it to a browser serves no purpose and just widens the
+// blast radius if the encryption key were ever compromised later -
+// every previously-shipped ciphertext sitting in someone's dev tools
+// history or browser cache would become readable too. Applied at every
+// response site that sends a full monitor row/list; the dedicated
+// auth-scan-config route already returns an explicit column list that
+// never included this field in the first place.
+function stripAuthCredential(row) {
+  if (!row) return row;
+  // eslint-disable-next-line no-unused-vars -- destructured specifically to exclude it below
+  const { auth_scan_credential: _auth_scan_credential, ...rest } = row;
+  return rest;
+}
+function stripAuthCredentialFromList(rows) {
+  return rows.map(stripAuthCredential);
+}
 
 // Gate for every route that changes a monitor rather than just reading
 // it: the monitor's own creator can always manage it, and otherwise
@@ -136,7 +159,7 @@ router.get("/", async (req, res) => {
      ORDER BY created_at ASC`,
     [req.userId]
   );
-  res.json(rows);
+  res.json(stripAuthCredentialFromList(rows));
 });
 
 // Button-triggered version of the cron tick, scoped to one user's own
@@ -232,7 +255,7 @@ router.post("/", async (req, res) => {
       ]
     );
     if (organization_id) await logOrgAction(organization_id, req.userId, "monitor_created", `added monitor "${rows[0].name}"`);
-    res.status(201).json(rows[0]);
+    res.status(201).json(stripAuthCredential(rows[0]));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "failed to create monitor" });
@@ -368,7 +391,7 @@ router.patch("/:id", async (req, res) => {
     if (organization_id) {
       await logOrgAction(organization_id, req.userId, "monitor_created", `moved existing monitor "${rows[0].name}" into this org`);
     }
-    res.json(rows[0]);
+    res.json(stripAuthCredential(rows[0]));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "failed to update monitor" });
@@ -390,7 +413,7 @@ router.post("/:id/snooze", async (req, res) => {
      WHERE id = $1 RETURNING *`,
     [req.params.id, minutes]
   );
-  res.json(rows[0]);
+  res.json(stripAuthCredential(rows[0]));
 });
 
 router.post("/:id/unsnooze", async (req, res) => {
@@ -400,7 +423,7 @@ router.post("/:id/unsnooze", async (req, res) => {
     `UPDATE monitors SET snoozed_until = NULL, updated_at = now() WHERE id = $1 RETURNING *`,
     [req.params.id]
   );
-  res.json(rows[0]);
+  res.json(stripAuthCredential(rows[0]));
 });
 
 // Bulk versions of the same action, scoped to every active monitor the
@@ -562,6 +585,128 @@ router.delete("/:id/csp-violations", async (req, res) => {
   if (!monitor) return;
   await pool.query(`DELETE FROM csp_violations WHERE monitor_id = $1`, [req.params.id]);
   res.status(204).end();
+});
+
+// ---------------------------------------------------------------------
+// Authenticated scan (opt-in) - see lib/authScan.js and db.js's
+// auth_scan_* columns for the full reasoning. Kept as its own
+// sub-resource rather than folded into the main PATCH /:id: this
+// involves handing the app a real, usable credential, which deserves
+// its own explicit, separately-gated action rather than being one field
+// among many in a general-purpose edit form request.
+// ---------------------------------------------------------------------
+
+router.patch("/:id/auth-scan-config", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
+
+  const { enabled, credential, protected_paths } = req.body;
+
+  if (enabled === true) {
+    if (!isCredentialEncryptionConfigured()) {
+      return res.status(400).json({
+        error: "authenticated scanning isn't available on this deployment yet - CREDENTIAL_ENCRYPTION_KEY isn't configured",
+      });
+    }
+    // A credential is required to (re-)enable, but not to just update
+    // protected_paths on an already-configured monitor - re-sending it
+    // every time an unrelated list of paths changes would mean the
+    // plaintext travels over the wire (and through this handler) far
+    // more often than the one time it actually needs to.
+    const hasStoredCredential = !!monitor.auth_scan_credential;
+    if (!credential && !(monitor.auth_scan_enabled && hasStoredCredential)) {
+      return res.status(400).json({ error: "a session cookie or bearer token is required to enable authenticated scanning" });
+    }
+  }
+
+  if (credential !== undefined && credential !== null) {
+    if (credential.type === "bearer" && !credential.value?.trim()) {
+      return res.status(400).json({ error: "bearer credential needs a value" });
+    }
+    if (credential.type === "cookie" && (!credential.name?.trim() || !credential.value?.trim())) {
+      return res.status(400).json({ error: "cookie credential needs both a name and a value" });
+    }
+    if (credential.type !== "bearer" && credential.type !== "cookie") {
+      return res.status(400).json({ error: "credential type must be \"cookie\" or \"bearer\"" });
+    }
+  }
+
+  if (Array.isArray(protected_paths)) {
+    // A real cap, not just tidiness - every path here gets an actual
+    // outbound request on every scheduled scan, all against this
+    // monitor's own origin. Nothing stops a much longer list otherwise,
+    // and an unbounded one turns a single scan into an accidental
+    // hammering of someone's own site (or a stuck cron tick working
+    // through it) rather than a genuine access-control check.
+    if (protected_paths.length > 25) {
+      return res.status(400).json({ error: "up to 25 protected paths at a time" });
+    }
+    for (const path of protected_paths) {
+      if (typeof path !== "string" || !path.startsWith("/")) {
+        return res.status(400).json({ error: `protected path "${path}" must start with /, e.g. /admin` });
+      }
+    }
+  }
+
+  let encryptedCredential;
+  if (credential === null) {
+    encryptedCredential = null; // explicit clear
+  } else if (credential) {
+    encryptedCredential = encryptCredential(JSON.stringify(credential));
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE monitors SET
+       auth_scan_enabled = COALESCE($2, auth_scan_enabled),
+       auth_scan_credential = CASE WHEN $3 THEN $4 ELSE auth_scan_credential END,
+       auth_scan_protected_paths = CASE WHEN $5 THEN $6 ELSE auth_scan_protected_paths END,
+       -- Set the first time this is turned on, and again on every
+       -- credential update - a deliberate, timestamped record that the
+       -- owner authorized this each time it happened, not just once
+       -- ever. Never cleared by disabling; that history is worth
+       -- keeping even after the fact.
+       auth_scan_consent_at = CASE WHEN $2 = true OR $3 THEN now() ELSE auth_scan_consent_at END
+     WHERE id = $1 RETURNING id, auth_scan_enabled, auth_scan_protected_paths, auth_scan_consent_at, auth_scanned_at`,
+    [
+      req.params.id,
+      enabled === undefined ? null : enabled,
+      encryptedCredential !== undefined,
+      encryptedCredential,
+      Array.isArray(protected_paths),
+      Array.isArray(protected_paths) ? JSON.stringify(protected_paths) : null,
+    ]
+  );
+  res.json(rows[0]);
+});
+
+// Read-only, same broadened org-member access as every other GET here -
+// never includes the credential itself, only the scan's own findings.
+// Unlike every other read in this file, this one does NOT use the
+// broadened member-read access every other GET does - deliberately.
+// The anonymous scan's findings are about what's already public, so any
+// org member seeing them costs nothing; an authenticated scan's
+// findings describe a restricted area (whatever the credential can
+// reach), which not every member is necessarily entitled to know facts
+// about just because they can see this monitor. Same admin+/creator
+// gate as configuring the scan in the first place.
+router.get("/:id/auth-scan", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
+  const { rows } = await pool.query(`SELECT * FROM auth_scans WHERE monitor_id = $1 ORDER BY scanned_at DESC LIMIT 1`, [req.params.id]);
+  res.json(rows[0] || null);
+});
+
+router.post("/:id/auth-scan", async (req, res) => {
+  const monitor = await loadMonitorForMutation(req, res);
+  if (!monitor) return;
+  if (!monitor.auth_scan_enabled || !monitor.auth_scan_credential) {
+    return res.status(400).json({ error: "authenticated scanning isn't configured for this monitor" });
+  }
+  if (!isCredentialEncryptionConfigured()) {
+    return res.status(400).json({ error: "authenticated scanning isn't available on this deployment yet - CREDENTIAL_ENCRYPTION_KEY isn't configured" });
+  }
+  const record = await runAndRecordAuthScan(monitor);
+  res.json(record);
 });
 
 // TLS posture from the last handshake: protocol, cipher, chain, SANs,

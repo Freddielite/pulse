@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare, getSecurityHistory, getSecurityEvents, acknowledgeSecurityEvent, getMonitorTls, getMonitorDns, runDnsCheck, getMonitorCertificates, runCertificateCheck, createMonitor, getOrganization, getCspViolations, clearCspViolations, BASE } from "../api.js";
+import { getMonitorChecks, getMonitorIncidents, getMonitorUptime, getMonitorDailyUptime, getMonitorSecurity, runSecurityScan, deleteMonitor, snoozeMonitor, unsnoozeMonitor, enableMonitorShare, regenerateMonitorShare, revokeMonitorShare, getSecurityHistory, getSecurityEvents, acknowledgeSecurityEvent, getMonitorTls, getMonitorDns, runDnsCheck, getMonitorCertificates, runCertificateCheck, createMonitor, getOrganization, getCspViolations, clearCspViolations, getAuthScan, BASE } from "../api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import MonitorForm from "./MonitorForm.jsx";
 import MonitorHeatmap from "./MonitorHeatmap.jsx";
@@ -8,6 +8,7 @@ import SecurityScanPanel from "./SecurityScanPanel.jsx";
 import SecurityTrendChart from "./SecurityTrendChart.jsx";
 import SecurityTimeline from "./SecurityTimeline.jsx";
 import CspViolations from "./CspViolations.jsx";
+import AuthenticatedScanPanel from "./AuthenticatedScanPanel.jsx";
 import { TlsPanel, DnsPanel, CertificatesPanel } from "./DomainPanels.jsx";
 
 const SNOOZE_OPTIONS = [
@@ -44,6 +45,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
   const [securityHistory, setSecurityHistory] = useState([]);
   const [securityEvents, setSecurityEvents] = useState([]);
   const [cspViolations, setCspViolations] = useState([]);
+  const [authScan, setAuthScan] = useState(null);
   const [cspClearing, setCspClearing] = useState(false);
   const [tls, setTls] = useState(null);
   const [dns, setDns] = useState(null);
@@ -118,7 +120,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
     // panel rendered for it, so those reads are skipped rather than
     // fetched and discarded.
     const httpish = monitor.monitor_type !== "tcp";
-    const [c, i, u, d, s, sh, se, t, dn, ct, cv] = await Promise.all([
+    const [c, i, u, d, s, sh, se, t, dn, ct, cv, as] = await Promise.all([
       getMonitorChecks(monitor.id),
       getMonitorIncidents(monitor.id),
       getMonitorUptime(monitor.id),
@@ -130,6 +132,14 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
       httpish ? getMonitorDns(monitor.id) : Promise.resolve(null),
       httpish ? getMonitorCertificates(monitor.id) : Promise.resolve(null),
       httpish ? getCspViolations(monitor.id) : Promise.resolve([]),
+      // .catch here specifically: GET /:id/auth-scan is admin+/creator-
+      // only (not the broadened member-read every other GET here uses -
+      // see monitors.js for why), so a plain member would otherwise
+      // turn this one rejected promise into the entire page failing to
+      // load. Falling back to null just means the panel shows "not run
+      // yet" for a member who can't manage it anyway, rather than
+      // breaking everything else on the page over one 403.
+      httpish && monitor.auth_scan_enabled ? getAuthScan(monitor.id).catch(() => null) : Promise.resolve(null),
     ]);
     // Guards against a slow response from a monitor you've since navigated
     // away from landing after the fact and overwriting whatever's actually
@@ -148,6 +158,7 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
     setDns(dn);
     setCertificates(ct);
     setCspViolations(cv || []);
+    setAuthScan(as || null);
   }
 
   useEffect(() => {
@@ -611,6 +622,23 @@ export default function MonitorDetail({ monitor, currentUser, existingGroups = [
 
       {monitor.monitor_type !== "tcp" && (
         <CspViolations violations={cspViolations} onClear={handleClearCspViolations} clearing={cspClearing} canManage={canManage} />
+      )}
+
+      {monitor.monitor_type !== "tcp" && (
+        <AuthenticatedScanPanel
+          monitor={monitor}
+          latestScan={authScan}
+          onChanged={() => {
+            // Both needed: onChanged (the prop from App.jsx) refreshes
+            // the monitor record itself - auth_scan_enabled and friends
+            // live there, not in this component's own state - while
+            // load() refetches this component's local state, which is
+            // the only place the actual scan result (authScan) lives.
+            onChanged();
+            load();
+          }}
+          canManage={canManage}
+        />
       )}
 
       {monitor.monitor_type !== "tcp" && (

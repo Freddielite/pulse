@@ -17,6 +17,7 @@
 
 import dns from "node:dns/promises";
 import net from "node:net";
+import psl from "psl";
 
 const LOOKUP_TIMEOUT_MS = 8000;
 // Deliberately short - this only ever softens an alert's wording, never
@@ -49,13 +50,22 @@ async function tryResolve(fn) {
   }
 }
 
+// Backed by the actual Public Suffix List (via the psl package) rather
+// than the "last two labels" guess this used to be - that guess is
+// wrong for exactly the domains most likely to matter to Wyntek's own
+// client base (.com.ng, plus .co.uk and every other multi-part suffix
+// worldwide), and it was wrong silently: a monitor on a .com.ng domain
+// was checking NS/MX/CAA/DMARC against a fabricated "root" that isn't
+// actually the registrable domain, with no visible sign anything was
+// off. Two things psl doesn't know about, handled before it ever sees
+// them: an IP address has no registrable-domain concept at all (psl
+// would happily mis-treat the last octet as a "TLD"), and a bare
+// unlisted hostname (localhost, an internal-only name with no public
+// suffix) - psl.get() returns null for both, and either way the
+// hostname itself is the only sensible "root" to fall back to.
 export function registrableRoot(hostname) {
-  const parts = hostname.split(".");
-  // Same deliberately simple heuristic getDomainExpiry already uses. It's
-  // wrong for multi-part public suffixes (co.uk, com.ng) and right for
-  // the overwhelming majority of what this app watches; a full Public
-  // Suffix List would be a dependency and a data file to keep current.
-  return parts.length > 2 ? parts.slice(-2).join(".") : hostname;
+  if (net.isIP(hostname)) return hostname;
+  return psl.get(hostname) || hostname;
 }
 
 export async function snapshotDns(hostname) {
@@ -323,6 +333,15 @@ export function dnsFindings(snapshot) {
 // certificate. The detection is: the CNAME target belongs to a known
 // platform, and the platform answers with its characteristic
 // "nothing is configured here" response.
+// Expanded from the original 8 using the same publicly-documented
+// fingerprints every subdomain-takeover scanner draws from (this is
+// long-established, widely-published security research - not
+// exploitation-enabling knowledge, since the whole point of publishing
+// these signatures is so defenders can find a dangling CNAME before
+// someone else does). Each marker is the platform's own "nothing is
+// configured here" page text, still just a passive string match against
+// whatever the hostname already serves - nothing here changes what
+// checkDanglingCname() below actually does.
 const TAKEOVER_SIGNATURES = [
   { platform: "GitHub Pages", target: /\.github\.io$/i, marker: /There isn't a GitHub Pages site here/i },
   { platform: "Heroku", target: /\.herokuapp\.com$/i, marker: /No such app|no-such-app\.html/i },
@@ -332,6 +351,16 @@ const TAKEOVER_SIGNATURES = [
   { platform: "Shopify", target: /\.myshopify\.com$/i, marker: /Sorry, this shop is currently unavailable/i },
   { platform: "Fastly", target: /\.fastly\.net$/i, marker: /Fastly error: unknown domain/i },
   { platform: "Azure", target: /\.azurewebsites\.net$|\.cloudapp\.azure\.com$/i, marker: /Error 404 - Web app not found/i },
+  { platform: "Bitbucket", target: /\.bitbucket\.io$/i, marker: /Repository not found/i },
+  { platform: "WordPress.com", target: /\.wordpress\.com$/i, marker: /Do you want to register/i },
+  { platform: "Surge.sh", target: /\.surge\.sh$/i, marker: /project not found/i },
+  { platform: "Tumblr", target: /\.tumblr\.com$/i, marker: /Whatever you were looking for doesn't currently exist/i },
+  { platform: "Zendesk", target: /\.zendesk\.com$/i, marker: /Help Center Closed/i },
+  { platform: "UserVoice", target: /\.uservoice\.com$/i, marker: /This UserVoice subdomain is currently available/i },
+  { platform: "Ghost(Pro)", target: /\.ghost\.io$/i, marker: /The thing you were looking for is no longer here, or never was/i },
+  { platform: "Pantheon", target: /\.pantheonsite\.io$/i, marker: /The gods are wise, but do not know of the site which you seek/i },
+  { platform: "ReadMe", target: /\.readme\.io$/i, marker: /Project doesnt exist\.\.\. yet!/i },
+  { platform: "Intercom", target: /\.custom\.intercom\.help$/i, marker: /This page is reserved for artistic dogs/i },
 ];
 
 export async function checkDanglingCname(hostname, snapshot) {

@@ -618,5 +618,53 @@ export async function migrate() {
       expires_at     TIMESTAMPTZ NOT NULL DEFAULT now() + interval '24 hours'
     );
     CREATE INDEX IF NOT EXISTS idx_pending_signups_token_hash ON pending_signups(token_hash);
+
+    -- Custom domain for a status page - moved here from
+    -- organizations.custom_domain (which stays in place, unused, for
+    -- backward compatibility rather than a destructive column drop) once
+    -- it became clear a domain belongs to one specific status page, not
+    -- to a whole org: an org managing status pages for several different
+    -- clients would want a different domain per page, not one shared
+    -- across all of them. verified_at is null until DNS actually checks
+    -- out (see lib/customDomain.js) - a domain the owner typed in but
+    -- hasn't pointed at anything yet shouldn't be treated as live.
+    ALTER TABLE status_pages ADD COLUMN IF NOT EXISTS custom_domain TEXT UNIQUE;
+    ALTER TABLE status_pages ADD COLUMN IF NOT EXISTS custom_domain_verified_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_status_pages_custom_domain ON status_pages(custom_domain) WHERE custom_domain IS NOT NULL;
+
+    -- Authenticated scanning: opt-in, per monitor, off for every existing
+    -- monitor by default and staying off unless the owner explicitly
+    -- turns it on (auth_scan_consent_at records when they did, as a
+    -- deliberate audit trail for a feature that involves this app
+    -- holding a real credential for someone's site - a materially
+    -- bigger trust step than the anonymous scan every monitor already
+    -- gets). auth_scan_credential is application-layer encrypted (see
+    -- lib/credentialCrypto.js) rather than just hashed - unlike a
+    -- password, it has to be readable again to actually use on the next
+    -- scan, so hashing isn't an option here, and it's kept out of
+    -- api_tokens' hash-only pattern for exactly that reason.
+    -- auth_scan_protected_paths is a JSON array of paths the owner
+    -- asserts should require login (e.g. ["/admin", "/api/account"]) -
+    -- lib/authScan.js only ever checks paths listed here, nothing
+    -- inferred or guessed.
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_scan_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_scan_credential TEXT;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_scan_protected_paths JSONB;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_scan_consent_at TIMESTAMPTZ;
+    ALTER TABLE monitors ADD COLUMN IF NOT EXISTS auth_scanned_at TIMESTAMPTZ;
+
+    -- Kept as its own history table rather than folded into
+    -- security_scans - an authenticated result isn't the same
+    -- population as the anonymous scan every monitor gets, and mixing
+    -- them would make the regular security trend chart jump around for
+    -- monitors that opt into this on top of it.
+    CREATE TABLE IF NOT EXISTS auth_scans (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      monitor_id  UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      scanned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      score       INTEGER NOT NULL,
+      findings    JSONB NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_scans_monitor_time ON auth_scans(monitor_id, scanned_at DESC);
   `);
 }

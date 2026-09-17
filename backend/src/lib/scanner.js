@@ -98,7 +98,7 @@ async function safeFetch(url, budget, options = {}) {
   }
 }
 
-function finding(check, pass, detail, severity, category, remediation = null) {
+export function finding(check, pass, detail, severity, category, remediation = null) {
   return { check, pass, detail, severity, category, remediation };
 }
 
