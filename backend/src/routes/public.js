@@ -197,6 +197,64 @@ router.get("/status-pages/:token", async (req, res) => {
     byMonitor[row.monitor_id][key] = row.uptime_pct;
   }
 
+  // One row per monitor per day it actually had checks - days with no
+  // row at all (monitor didn't exist yet, or a gap) render as "no data"
+  // on the frontend rather than being mistaken for a day it was down.
+  // Degraded isn't reconstructed here: it's a stateful "N consecutive
+  // slow checks" concept on the live monitor (see checkRunner.js), not
+  // something the raw checks table can be replayed into after the fact
+  // without approximating - the daily bar sticks to the one distinction
+  // (down/not down) the data can actually support precisely.
+  const { rows: dailyRows } = await pool.query(
+    `SELECT monitor_id, date_trunc('day', checked_at)::date AS day, BOOL_OR(status = 'down') AS had_down
+     FROM checks
+     WHERE monitor_id = ANY($1::uuid[]) AND checked_at >= now() - interval '90 days'
+     GROUP BY monitor_id, day`,
+    [ids]
+  );
+  const dailyByMonitor = {};
+  for (const row of dailyRows) {
+    const key = row.monitor_id;
+    dailyByMonitor[key] = dailyByMonitor[key] || {};
+    dailyByMonitor[key][row.day.toISOString().slice(0, 10)] = row.had_down ? "down" : "up";
+  }
+  const today = new Date();
+  function dailyHistoryFor(monitorId) {
+    const byDay = dailyByMonitor[monitorId] || {};
+    const history = [];
+    for (let i = 89; i >= 0; i--) {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      history.push({ date: key, status: byDay[key] || "none" });
+    }
+    return history;
+  }
+
+  // Deliberately just started_at/resolved_at, never error_message - a
+  // public status page is for a monitor's own visitors/clients, not a
+  // window into this app's internal check output ("Expected 200, got
+  // 403" reveals more about how the check works than an outside viewer
+  // needs, and occasionally more about the target's own infra than its
+  // owner would want advertised). Capped at 10 per monitor so a
+  // genuinely flaky one doesn't turn this into an unbounded public log.
+  const { rows: incidentRows } = await pool.query(
+    `SELECT * FROM (
+       SELECT monitor_id, started_at, resolved_at,
+              ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY started_at DESC) AS rn
+       FROM incidents
+       WHERE monitor_id = ANY($1::uuid[]) AND started_at >= now() - interval '90 days'
+     ) ranked
+     WHERE rn <= 10
+     ORDER BY started_at DESC`,
+    [ids]
+  );
+  const incidentsByMonitor = {};
+  for (const row of incidentRows) {
+    incidentsByMonitor[row.monitor_id] = incidentsByMonitor[row.monitor_id] || [];
+    incidentsByMonitor[row.monitor_id].push({ started_at: row.started_at, resolved_at: row.resolved_at });
+  }
+
   res.json({
     name: page.name,
     branding,
@@ -207,6 +265,8 @@ router.get("/status-pages/:token", async (req, res) => {
         "7d": byMonitor[m.id]?.["7d"] ?? null,
         "30d": byMonitor[m.id]?.["30d"] ?? null,
       },
+      dailyHistory: dailyHistoryFor(m.id),
+      recentIncidents: incidentsByMonitor[m.id] || [],
     })),
   });
 });

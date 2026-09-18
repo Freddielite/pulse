@@ -12,6 +12,64 @@ function timeAgo(iso) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function formatDuration(ms) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+// 90 thin bars, one per day, oldest to newest - the same "history at a
+// glance" visual every major status page uses. Degraded isn't a color
+// here on purpose - see the backend's comment on dailyHistory for why
+// the daily bucket only distinguishes down/not-down rather than
+// approximating a stateful "N consecutive slow checks" concept after
+// the fact.
+function UptimeBar({ history }) {
+  if (!history || history.length === 0) return null;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 2 }}>
+        {history.map((day) => (
+          <div
+            key={day.date}
+            title={`${day.date}: ${day.status === "down" ? "Outage" : day.status === "up" ? "Operational" : "No data"}`}
+            style={{
+              flex: 1,
+              height: 22,
+              borderRadius: 2,
+              background: day.status === "down" ? "var(--alert)" : day.status === "up" ? "var(--signal)" : "var(--panel-border)",
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--ink-faint)", marginTop: 4 }}>
+        <span>{history.length} days ago</span>
+        <span>Today</span>
+      </div>
+    </div>
+  );
+}
+
+// Deliberately just date + duration, matching the backend's own
+// redaction (see routes/public.js) - no raw error text on a page a
+// monitor's own visitors or clients might see.
+function IncidentList({ incidents }) {
+  if (!incidents || incidents.length === 0) return null;
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--panel-border)" }}>
+      <div style={{ fontSize: 10.5, color: "var(--ink-faint)", textTransform: "uppercase", marginBottom: 6 }}>Recent incidents</div>
+      {incidents.map((inc, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0", color: "var(--ink-dim)" }}>
+          <span>{new Date(inc.started_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
+          <span>{inc.resolved_at ? `Down for ${formatDuration(new Date(inc.resolved_at) - new Date(inc.started_at))}` : "Ongoing"}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function BrandMark() {
   return (
     <svg width="24" height="24" viewBox="0 0 100 100">
@@ -102,28 +160,34 @@ export default function SharedStatusPageView({ token }) {
         </div>
       ) : (
         page.monitors.map((m) => (
-          <div className="pl-panel" key={m.id} style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
-              <div className={`pl-status-dot ${m.current_status === "up" ? "pl-status-dot--up" : m.current_status === "degraded" ? "pl-status-dot--degraded" : m.current_status === "down" ? "pl-status-dot--down" : ""}`} />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</div>
-                <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Checked {timeAgo(m.last_checked_at)}</div>
+          <div className="pl-panel" key={m.id} style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+                <div className={`pl-status-dot ${m.current_status === "up" ? "pl-status-dot--up" : m.current_status === "degraded" ? "pl-status-dot--degraded" : m.current_status === "down" ? "pl-status-dot--down" : ""}`} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
+                    {m.last_response_ms != null ? `${m.last_response_ms}ms · ` : ""}Checked {timeAgo(m.last_checked_at)}
+                  </div>
+                </div>
+              </div>
+              <div className="pl-status-page-row__stats" style={{ display: "flex", flexShrink: 0 }}>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["24h"] != null ? `${m.uptime["24h"]}%` : "N/A"}</div>
+                  <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>24h</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["7d"] != null ? `${m.uptime["7d"]}%` : "N/A"}</div>
+                  <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>7d</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["30d"] != null ? `${m.uptime["30d"]}%` : "N/A"}</div>
+                  <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>30d</div>
+                </div>
               </div>
             </div>
-            <div className="pl-status-page-row__stats" style={{ display: "flex", flexShrink: 0 }}>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["24h"] != null ? `${m.uptime["24h"]}%` : "N/A"}</div>
-                <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>24h</div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["7d"] != null ? `${m.uptime["7d"]}%` : "N/A"}</div>
-                <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>7d</div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{m.uptime["30d"] != null ? `${m.uptime["30d"]}%` : "N/A"}</div>
-                <div style={{ fontSize: 10, color: "var(--ink-faint)", textTransform: "uppercase" }}>30d</div>
-              </div>
-            </div>
+            <UptimeBar history={m.dailyHistory} />
+            <IncidentList incidents={m.recentIncidents} />
           </div>
         ))
       )}

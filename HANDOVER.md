@@ -200,6 +200,34 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Combined status page: 90-day uptime history bar, a public incident
+  log, and response time - it was just a name, a status dot, and three
+  uptime percentages before.**
+  - `GET /api/public/status-pages/:token` (`public.js`) now also
+    returns, per monitor: `dailyHistory` (90 entries, oldest to newest,
+    each `{date, status}` where status is `up`/`down`/`none` - bucketed
+    from the `checks` table by day) and `recentIncidents` (last 10 from
+    the `incidents` table, capped so a genuinely flaky monitor can't
+    turn this into an unbounded public log). Deliberately just
+    `started_at`/`resolved_at` on incidents, never `error_message` - a
+    public status page is for a monitor's own visitors or clients, not
+    a window into this app's internal check output ("Expected 200, got
+    403" reveals more about how the check works, and sometimes about
+    the target's own infra, than an outside viewer needs).
+  - "Degraded" is deliberately not a color in the daily bar. It's a
+    stateful "N consecutive slow checks" concept tracked live on the
+    monitor (see `checkRunner.js`), not something the raw `checks`
+    table can be replayed into after the fact without approximating -
+    the bar sticks to the one distinction (down / not down) the data
+    actually supports precisely, rather than a plausible-looking guess.
+  - Response time was already being sent to the frontend
+    (`last_response_ms`, selected by `resolveStatusPageMonitors()` all
+    along) but never displayed - now shown next to "Checked Xm ago" on
+    each monitor row.
+  - Frontend: new `UptimeBar` and `IncidentList` in
+    `SharedStatusPageView.jsx`, rendered under each monitor's existing
+    row.
+
 - **Pagination on the monitor detail page's longest lists.** Incident
   history (backend caps at 50), the security timeline (default 50), and
   CSP violations (caps at 200) were all rendering their entire fetched
