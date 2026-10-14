@@ -134,7 +134,9 @@ const RECORD_LABELS = {
   dmarc: "DMARC",
 };
 
-const SEVERITY_DOWNGRADE = { critical: "high", high: "medium", medium: "low", low: "low" };
+// Platforms that rotate edge IPs on their own. A record churn on these
+// hostnames is routine and must not page anyone.
+const PROVIDER_MANAGED_HOST = /\.(vercel\.app|onrender\.com|netlify\.app|pages\.dev|github\.io|fly\.dev|railway\.app)$/i;
 
 // Team Cymru's free, no-API-key IP-to-ASN lookup, done over DNS (the
 // same "query a TXT record" shape every other check in this file
@@ -186,16 +188,36 @@ export async function diffSnapshots(previous, current) {
     // Vercel migration that motivated this is a real example), and it's
     // indistinguishable from a hijack by IP value alone. Same ASN isn't
     // proof nothing's wrong - nothing stops an attacker from operating
-    // inside a big provider's network too - so this softens the
-    // severity and wording rather than suppressing the event outright;
-    // it's still worth a glance, just not "someone hijacked your
-    // domain" urgent.
+    // inside a big provider's network too - so it is
+    // dropped to low severity: still recorded on the timeline, but it
+    // never notifies (low is below the notify threshold in
+    // securityEvents.js). A change to a different network keeps its
+    // full severity.
     let sameNetworkAsn = null;
+    let providerManaged = false;
+    if (key === "a" || key === "aaaa") {
+      // Hosts on a managed platform (Vercel, Render, Netlify...) have
+      // their edge IPs rotated by the provider with no action from the
+      // owner. A change there is expected churn, so it is recorded to
+      // the timeline at low severity and never notifies.
+      if (PROVIDER_MANAGED_HOST.test(current.hostname || "")) {
+        providerManaged = true;
+        severity = "low";
+      }
+    }
     if (key === "a" && added.length > 0 && removed.length > 0) {
-      const [addedAsn, removedAsn] = await Promise.all([lookupAsn(added[0]), lookupAsn(removed[0])]);
-      if (addedAsn && removedAsn && addedAsn === removedAsn) {
-        sameNetworkAsn = addedAsn;
-        severity = SEVERITY_DOWNGRADE[severity] || severity;
+      // Every added and removed address is looked up (not just the
+      // first), and the change only counts as same-network when all
+      // of them resolve and every new address sits on an ASN the old
+      // set already used.
+      const [addedAsns, removedAsns] = await Promise.all([
+        Promise.all(added.map(lookupAsn)),
+        Promise.all(removed.map(lookupAsn)),
+      ]);
+      const allResolved = [...addedAsns, ...removedAsns].every(Boolean);
+      if (allResolved && addedAsns.every((asn) => removedAsns.includes(asn))) {
+        sameNetworkAsn = addedAsns[0];
+        severity = "low";
       }
     }
 
@@ -206,6 +228,7 @@ export async function diffSnapshots(previous, current) {
       added,
       removed,
       sameNetworkAsn,
+      providerManaged,
       summary: [
         added.length > 0 ? `added ${added.join(", ")}` : null,
         removed.length > 0 ? `removed ${removed.join(", ")}` : null,

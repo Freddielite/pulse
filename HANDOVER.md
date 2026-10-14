@@ -62,6 +62,7 @@ curls the same URL works identically.
 | `FRONTEND_URL` | Yes | Required, not just "nice to have," as of email-verified signup: it's the only way a confirmation link can be built at all, and index.js warns loudly at boot in production if it's missing. Also used for org invite emails (falls back to a non-clickable "log into Pulse" there specifically if unset - that one feature alone would tolerate it being missing, signup won't). |
 | `CREDENTIAL_ENCRYPTION_KEY` | For authenticated scanning | A base64-encoded 32-byte key (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`) for encrypting the session cookie/bearer token a monitor owner provides for authenticated scanning - see lib/credentialCrypto.js. Deliberately has no insecure fallback the way SESSION_SECRET/CRON_SECRET do: without this set, authenticated scanning simply refuses to enable at all (routes/monitors.js's auth-scan-config route returns a clear error) rather than storing a credential some other way. |
 | `VERCEL_API_TOKEN` / `VERCEL_PROJECT_ID` / `VERCEL_TEAM_ID` | Optional, for custom domain automation | When all set (team ID only needed if the Vercel project is under a team, not a personal account), verifying a status page's custom domain also automatically registers it with the frontend's Vercel project via their API - see lib/customDomain.js. Without these, DNS verification still works, it just tells the org owner to add the domain in the Vercel dashboard themselves (Project -> Settings -> Domains) as the one remaining manual step. |
+| `MIN_FAILURES_BEFORE_ALERT` | Optional | Floor on consecutive failed checks before a monitor flips to down and alerts (default `2`, overrides a lower per-monitor `alert_after_failures`). Set `1` for the old one-strike behaviour. |
 
 The original DNS/TLS/CT posture features still need nothing beyond what
 was already required - DNS uses the system resolver, TLS is a plain
@@ -199,6 +200,11 @@ default, not a broken one.
   cap with distinct-looking rows for what's really one problem.
 
 ## Recent changes
+
+- **Alert noise fix: DNS rotation no longer notifies, and one failed check no longer flips a monitor to down.**
+  - `dnsCheck.js` `diffSnapshots`: A/AAAA changes on managed-platform hosts (`*.vercel.app`, `onrender.com`, `netlify.app`, `pages.dev`, `github.io`, `fly.dev`, `railway.app`) are now `low` severity, so they are recorded on the timeline but never notify. For other hosts, a same-ASN change is also `low`; every added and removed IP is now checked, not just the first. A change to a different ASN keeps its full severity.
+  - `checkRunner.js`: a monitor needs at least `MIN_FAILURES_BEFORE_ALERT` (default 2) consecutive failed checks before it goes down. A real outage is only delayed by one check interval.
+  - `urlSafety.js`: `dns.lookup` is retried on transient errors (EAI_AGAIN, timeouts) before reporting "could not resolve host". ENOTFOUND is still immediate.
 
 - **Combined status page: 90-day uptime history bar, a public incident
   log, and response time - it was just a name, a status dot, and three

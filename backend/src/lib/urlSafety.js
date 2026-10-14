@@ -56,6 +56,26 @@ function isPrivateOrReservedIp(ip) {
   return true; // not a parseable IP at all - fail closed
 }
 
+// dns.lookup fails transiently (EAI_AGAIN, timeouts) on a busy or
+// freshly woken host. That is a problem on the checker's side, not
+// proof the target is down, so retry before giving up. ENOTFOUND is a
+// real "no such host" answer and is not retried.
+const TRANSIENT_DNS_CODES = new Set(["EAI_AGAIN", "ETIMEOUT", "ETIMEDOUT", "ECONNREFUSED", "ESERVFAIL", "EAI_FAIL"]);
+async function lookupAllWithRetry(hostname) {
+  const delays = [0, 600, 1500];
+  let lastErr;
+  for (const delay of delays) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    try {
+      return await dns.lookup(hostname, { all: true });
+    } catch (err) {
+      lastErr = err;
+      if (!TRANSIENT_DNS_CODES.has(err.code)) break;
+    }
+  }
+  throw lastErr;
+}
+
 // Resolves the hostname and rejects the URL if the scheme isn't
 // http(s), or if ANY resolved address is private/reserved - checking
 // every address dns.lookup returns, not just the first, since a
@@ -78,7 +98,7 @@ export async function assertPublicHttpUrl(rawUrl) {
 
   let addresses;
   try {
-    addresses = await dns.lookup(parsed.hostname, { all: true });
+    addresses = await lookupAllWithRetry(parsed.hostname);
   } catch {
     throw new Error("could not resolve host");
   }
@@ -98,7 +118,7 @@ export async function assertPublicHttpUrl(rawUrl) {
 export async function assertPublicHost(hostname) {
   let addresses;
   try {
-    addresses = await dns.lookup(hostname, { all: true });
+    addresses = await lookupAllWithRetry(hostname);
   } catch {
     throw new Error("could not resolve host");
   }

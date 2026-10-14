@@ -46,6 +46,7 @@ const MAX_CT_CHECKS_PER_RUN = 3;
 // want to know it's still broken" against not turning a multi-hour outage
 // into a stream of identical notifications.
 const REPEAT_ALERT_INTERVAL_MS = 60 * 60 * 1000;
+const MIN_FAILURES_BEFORE_ALERT = Math.max(1, Number(process.env.MIN_FAILURES_BEFORE_ALERT) || 2);
 
 // Runs the uptime check for exactly the monitor rows it's given. Callers
 // decide *which* monitors qualify: the cron tick asks for whatever is due
@@ -95,7 +96,13 @@ async function checkOneMonitor(monitor) {
   );
 
   const wasAlertingDown = monitor.current_status === "down";
-  const threshold = monitor.alert_after_failures || 1;
+  // Floor on consecutive failed checks before a monitor flips to down.
+  // One failed check (even after the in-check retry) is too often a
+  // blip on the checker's side: a resolver hiccup, a cold Render
+  // instance, a bot-mitigation challenge. A real outage fails the next
+  // tick too, so it is only delayed by one check interval. Override
+  // with MIN_FAILURES_BEFORE_ALERT (1 restores the old behaviour).
+  const threshold = Math.max(monitor.alert_after_failures || 1, MIN_FAILURES_BEFORE_ALERT);
   let alerted = false;
 
   if (result.status === "down") {
@@ -673,8 +680,10 @@ export async function runDnsSweep({ userId = null, monitorId = null, limit = MAX
         kind: "dns_drift",
         severity: change.severity,
         title: `${change.label} record changed`,
-        detail: change.sameNetworkAsn
-          ? `${change.summary}. The old and new address both belong to the same network (AS${change.sameNetworkAsn}) - this is what a hosting provider rotating its own infrastructure looks like, not usually a hijack. Still worth a glance if it's unexpected, just not urgent the way a change to an unrelated network would be.`
+        detail: change.providerManaged
+          ? `${change.summary}. This hostname is on a managed hosting platform that rotates its own edge addresses, so this is routine. Recorded for history only.`
+          : change.sameNetworkAsn
+          ? `${change.summary}. The old and new addresses all belong to the same network (AS${change.sameNetworkAsn}), which is what a hosting provider rotating its own infrastructure looks like. Recorded for history only.`
           : `${change.summary}. If you didn't make this change, treat it seriously - DNS is how an attacker redirects a domain without ever touching the server.`,
         data: change,
         dedupeKey: `${change.record}:${[...change.added, ...change.removed].sort().join(",")}`,
