@@ -472,7 +472,7 @@ export async function migrate() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_backup_codes JSONB;
 
-    -- Breach exposure monitoring (HaveIBeenPwned), opt-in and off by
+    -- Breach exposure monitoring (XposedOrNot, optional HIBP), opt-in and off by
     -- default like every other alert-adjacent feature here - it queries
     -- a third party with the user's own email address, so defaulting it
     -- on would be the wrong call even though the check itself is

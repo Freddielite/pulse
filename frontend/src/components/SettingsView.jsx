@@ -438,7 +438,7 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
           <div>
             <div className="pl-settings-row__title">Data breach alerts</div>
             <div className="pl-settings-row__desc">
-              Weekly check of your alert email against HaveIBeenPwned - if it turns up in a new breach, you'll hear
+              Weekly check of your alert email against public breach databases - if it turns up in a new breach, you'll hear
               about it over whichever alert channels you already have on.
               {user.breach_monitoring_enabled && (
                 <>

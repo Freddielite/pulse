@@ -1,10 +1,11 @@
-// HaveIBeenPwned breach monitoring, checked against the account's own
-// alert email. Requires an API key (HIBP_API_KEY) - HIBP gated this
-// endpoint behind a paid subscription in 2019, so unlike crt.sh or Safe
-// Browsing there's no free/keyless path here at all. Opt-in per user
-// (breach_monitoring_enabled) and off by default: unlike every other
-// check in this app, the thing being queried is a person's email
-// address at a third party, not infrastructure they operate themselves.
+// Breach monitoring for the account's own alert email. Free by
+// default: XposedOrNot's public API needs no key. If HIBP_API_KEY is
+// also set, HaveIBeenPwned is queried as a second source and the two
+// results are merged, which widens coverage (neither corpus is a
+// superset of the other). Opt-in per user (breach_monitoring_enabled)
+// and off by default: unlike every other check in this app, the thing
+// being queried is a person's email address at a third party, not
+// infrastructure they operate themselves.
 //
 // Not stored in security_events - that table is keyed to a monitor_id,
 // and a breach isn't about any one monitor. The account-level cadence
@@ -20,38 +21,66 @@ import { sendWebhookAlert } from "./webhook.js";
 import { wantsNotification } from "./notificationPrefs.js";
 
 const BREACH_CHECK_INTERVAL_DAYS = 7;
-// HIBP's key tiers are rate-limited per-request (roughly one request
-// every couple seconds on the cheapest tier), so this caps how many a
-// single cron tick can burn through the same way MAX_DIGESTS_PER_RUN
-// caps the digest sweep - just smaller, since a slow provider here would
-// eat into the tick's own request budget rather than just this app's.
-const MAX_BREACH_CHECKS_PER_RUN = 10;
+// Kept small: the sweep runs inside a cron tick with a hard request
+// budget, and each lookup is a call to a third party.
+const MAX_BREACH_CHECKS_PER_RUN = 5;
+// Pause between users so a burst never trips the free API's rate limit.
+const DELAY_BETWEEN_USERS_MS = 750;
 
-const API_ROOT = "https://haveibeenpwned.com/api/v3/breachedaccount";
-const REQUEST_TIMEOUT_MS = 10000;
+const XON_API_ROOT = "https://api.xposedornot.com/v1/check-email";
+const HIBP_API_ROOT = "https://haveibeenpwned.com/api/v3/breachedaccount";
+const REQUEST_TIMEOUT_MS = 8000;
+const USER_AGENT = "Pulse-uptime-monitor";
 
+// The free path needs no key, so the feature is always available.
 export function breachCheckConfigured() {
-  return !!process.env.HIBP_API_KEY;
+  return true;
 }
 
-export async function checkBreaches(email) {
-  const apiKey = process.env.HIBP_API_KEY;
-  if (!apiKey) return { checked: false, breaches: [], reason: "HaveIBeenPwned not configured" };
-
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    const response = await fetch(`${API_ROOT}/${encodeURIComponent(email)}?truncateResponse=true`, {
-      headers: { "hibp-api-key": apiKey, "user-agent": "Pulse-uptime-monitor" },
-      signal: controller.signal,
-    }).finally(() => clearTimeout(timer));
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-    // 404 from this endpoint means "no breaches found" - it's not an
-    // error, just the shape HIBP uses for a clean result.
+// XposedOrNot free endpoint. A clean email is a 404, not an error. The
+// breaches field is a nested array (e.g. [["Name1","Name2"]]), so it is
+// flattened defensively.
+async function checkXposedOrNot(email) {
+  try {
+    const response = await fetchWithTimeout(`${XON_API_ROOT}/${encodeURIComponent(email)}`, {
+      headers: { "user-agent": USER_AGENT, accept: "application/json" },
+    });
+    if (response.status === 404) return { checked: true, breaches: [] };
+    if (!response.ok) {
+      console.error(`XposedOrNot returned ${response.status}`);
+      return { checked: false, breaches: [], reason: `XposedOrNot returned ${response.status}` };
+    }
+    const data = await response.json();
+    const names = [data?.breaches].flat(Infinity).filter((name) => typeof name === "string" && name.trim());
+    return { checked: true, breaches: names };
+  } catch (err) {
+    console.error("XposedOrNot lookup failed:", err.message);
+    return { checked: false, breaches: [], reason: err.message };
+  }
+}
+
+// Optional second source, only used when a paid key is configured.
+async function checkHibp(email) {
+  const apiKey = process.env.HIBP_API_KEY;
+  if (!apiKey) return { checked: false, breaches: [], reason: "HIBP not configured" };
+  try {
+    const response = await fetchWithTimeout(`${HIBP_API_ROOT}/${encodeURIComponent(email)}?truncateResponse=true`, {
+      headers: { "hibp-api-key": apiKey, "user-agent": USER_AGENT },
+    });
     if (response.status === 404) return { checked: true, breaches: [] };
     if (!response.ok) {
       console.error(`HaveIBeenPwned returned ${response.status}`);
-      return { checked: false, breaches: [], reason: `API returned ${response.status}` };
+      return { checked: false, breaches: [], reason: `HIBP returned ${response.status}` };
     }
     const data = await response.json();
     return { checked: true, breaches: (data || []).map((b) => b.Name) };
@@ -61,10 +90,36 @@ export async function checkBreaches(email) {
   }
 }
 
+// Two sources name the same breach slightly differently ("Adobe" vs
+// "adobe", "Linked-In" vs "LinkedIn"), so compare on a normalised key.
+const breachKey = (name) => String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+function mergeBreachNames(...lists) {
+  const seen = new Map();
+  for (const list of lists) {
+    for (const name of list) {
+      const key = breachKey(name);
+      if (key && !seen.has(key)) seen.set(key, name);
+    }
+  }
+  return [...seen.values()];
+}
+
+export async function checkBreaches(email) {
+  const hibpEnabled = !!process.env.HIBP_API_KEY;
+  const [xon, hibp] = await Promise.all([
+    checkXposedOrNot(email),
+    hibpEnabled ? checkHibp(email) : Promise.resolve({ checked: false, breaches: [] }),
+  ]);
+  const checked = xon.checked || hibp.checked;
+  if (!checked) return { checked: false, breaches: [], reason: xon.reason || hibp.reason };
+  return { checked: true, breaches: mergeBreachNames(xon.breaches, hibp.breaches), hibpUsed: hibp.checked };
+}
+
 async function notifyNewBreaches(user, newBreaches) {
   const email = user.alert_email || user.email;
   const title = `New data breach${newBreaches.length === 1 ? "" : "es"} found for your email`;
-  const body = `${newBreaches.join(", ")} - if you reuse this password anywhere, change it there. Full report: https://haveibeenpwned.com/account/${encodeURIComponent(email)}`;
+  const body = `${newBreaches.join(", ")} - if you reuse this password anywhere, change it there. Check your email yourself: https://xposedornot.com/`;
 
   if (wantsNotification(user, "push", "security")) {
     await sendPushToUser(user.id, { title, body: body.slice(0, 240), url: "/settings" });
@@ -81,10 +136,8 @@ async function notifyNewBreaches(user, newBreaches) {
 // Cron-tick-driven sweep, same shape as runDigestSweep(): every user
 // with breach_monitoring_enabled and a cadence clock that's due gets
 // checked, then the clock resets - even on a failed lookup, so a bad key
-// or an HIBP outage goes quiet instead of retrying every single tick.
+// or a provider outage goes quiet instead of retrying every single tick.
 export async function runBreachSweep() {
-  if (!breachCheckConfigured()) return 0;
-
   const { rows: due } = await pool.query(
     `SELECT * FROM users
      WHERE breach_monitoring_enabled = true
@@ -106,13 +159,17 @@ export async function runBreachSweep() {
       const result = await checkBreaches(email);
       if (result.checked) {
         const previousBreaches = user.breach_last_result?.breaches || [];
-        const newBreaches = result.breaches.filter((name) => !previousBreaches.includes(name));
+        const previousKeys = new Set(previousBreaches.map(breachKey));
+        const newBreaches = result.breaches.filter((name) => !previousKeys.has(breachKey(name)));
         if (newBreaches.length > 0 && !isFirstCheck) {
           await notifyNewBreaches(user, newBreaches);
         }
         await pool.query(`UPDATE users SET breach_last_result = $2 WHERE id = $1`, [
           user.id,
-          JSON.stringify({ breaches: result.breaches }),
+          // Union with what was known before, never a shrink: if one
+          // source is down on a later week, its breaches must not drop
+          // out of the baseline and re-alert as "new" when it recovers.
+          JSON.stringify({ breaches: mergeBreachNames(previousBreaches, result.breaches) }),
         ]);
       }
     } catch (err) {
@@ -120,6 +177,7 @@ export async function runBreachSweep() {
     }
     await pool.query(`UPDATE users SET breach_checked_at = now() WHERE id = $1`, [user.id]);
     checked += 1;
+    await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_USERS_MS));
   }
   return checked;
 }
