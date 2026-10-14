@@ -201,6 +201,8 @@ default, not a broken one.
 
 ## Recent changes
 
+- **Breach sweep failure handling.** XposedOrNot's free tier is 2 requests/second per IP plus hourly and daily caps, and on Render the IP is shared, so 429s will happen. A failed lookup no longer stamps `breach_checked_at` to now (which silenced the user for 7 days); it is back-dated to retry in 6 hours. First-check detection now uses `breach_last_result IS NULL` instead of the timestamp, so a failed first check can't turn the later baseline run into a burst of "new breach" alerts.
+
 - **Breach monitoring is now free by default.** `breachCheck.js` queries XposedOrNot (`/v1/check-email`, no key). `HIBP_API_KEY` is optional and adds HIBP as a second source; results are merged and de-duplicated on a normalised breach name. The stored baseline only grows (union), so a source outage never re-alerts old breaches as new. Sweep is 5 users per tick with a short pause between lookups. Alert link now points to xposedornot.com. XposedOrNot's corpus is smaller than HIBP's, so some breaches HIBP knows about can be missed.
 
 - **Alert noise fix: DNS rotation no longer notifies, and one failed check no longer flips a monitor to down.**

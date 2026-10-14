@@ -21,6 +21,7 @@ import { sendWebhookAlert } from "./webhook.js";
 import { wantsNotification } from "./notificationPrefs.js";
 
 const BREACH_CHECK_INTERVAL_DAYS = 7;
+const BREACH_RETRY_HOURS = 6;
 // Kept small: the sweep runs inside a cron tick with a hard request
 // budget, and each lookup is a call to a third party.
 const MAX_BREACH_CHECKS_PER_RUN = 5;
@@ -153,11 +154,16 @@ export async function runBreachSweep() {
     // content_hash's first value: a pre-existing breach found the
     // moment someone turns this on is a gap in their own prior
     // awareness, not a new event worth an urgent notification.
-    const isFirstCheck = user.breach_checked_at === null;
+    // Keyed off the stored result, not the timestamp, so a first check
+    // that fails (rate limit, timeout) and is retried is still treated
+    // as the baseline run instead of alerting on old breaches.
+    const isFirstCheck = !user.breach_last_result;
+    let succeeded = false;
     try {
       const email = user.alert_email || user.email;
       const result = await checkBreaches(email);
       if (result.checked) {
+        succeeded = true;
         const previousBreaches = user.breach_last_result?.breaches || [];
         const previousKeys = new Set(previousBreaches.map(breachKey));
         const newBreaches = result.breaches.filter((name) => !previousKeys.has(breachKey(name)));
@@ -175,7 +181,17 @@ export async function runBreachSweep() {
     } catch (err) {
       console.error(`breach check failed for user ${user.id}:`, err.message);
     }
-    await pool.query(`UPDATE users SET breach_checked_at = now() WHERE id = $1`, [user.id]);
+    // A failed lookup (429, timeout, provider down) must not silence
+    // the user for a full week. Back-date the stamp so it is retried in
+    // BREACH_RETRY_HOURS instead.
+    if (succeeded) {
+      await pool.query(`UPDATE users SET breach_checked_at = now() WHERE id = $1`, [user.id]);
+    } else {
+      await pool.query(
+        `UPDATE users SET breach_checked_at = now() - interval '${BREACH_CHECK_INTERVAL_DAYS} days' + interval '${BREACH_RETRY_HOURS} hours' WHERE id = $1`,
+        [user.id]
+      );
+    }
     checked += 1;
     await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_USERS_MS));
   }
