@@ -7,6 +7,7 @@ import {
   createApiToken,
   deleteApiToken,
   logout,
+  revokeAllSessions,
   testWebhook,
   setup2fa,
   confirm2fa,
@@ -307,6 +308,18 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
       toast(err.message, "error");
     } finally {
       setChangingPassword(false);
+    }
+  }
+
+  async function handleRevokeAll() {
+    if (!window.confirm("Sign out of every device, including this one?")) return;
+    setLoggingOut(true);
+    try {
+      await revokeAllSessions();
+      onLoggedOut();
+    } catch (err) {
+      setLoggingOut(false);
+      toast(err.message, "error");
     }
   }
 
@@ -700,6 +713,15 @@ export default function SettingsView({ user, onUserUpdated, onLoggedOut, toast }
           </div>
           <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleLogout} disabled={loggingOut}>
             {loggingOut ? "Logging out..." : "Log out"}
+          </button>
+        </div>
+        <div className="pl-settings-row">
+          <div>
+            <div className="pl-settings-row__title">Sign out everywhere</div>
+            <div className="pl-settings-row__desc">Ends every active session on every device.</div>
+          </div>
+          <button className="pl-btn pl-btn--ghost pl-btn--sm" onClick={handleRevokeAll} disabled={loggingOut}>
+            Sign out all
           </button>
         </div>
       </div>

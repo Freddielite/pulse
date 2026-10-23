@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { pool } from "../db.js";
+import crypto from "node:crypto";
+import { pool, pruneOldData } from "../db.js";
 import { runUptimeChecks, runCertSweep, runSecuritySweep, runDnsSweep, runCtSweep, runAuthScanSweep } from "../lib/checkRunner.js";
 import { runDigestSweep } from "../lib/digest.js";
 import { runBreachSweep } from "../lib/breachCheck.js";
@@ -11,11 +12,26 @@ const router = Router();
 // doesn't collide with a different advisory lock somewhere else.
 const TICK_LOCK_KEY = 727501;
 
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a || ""));
+  const y = Buffer.from(String(b || ""));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+// Header (x-cron-secret) is preferred since query strings end up in access
+// logs; ?secret= still works so existing cron-job.org jobs keep running.
+// In production with no CRON_SECRET the endpoint refuses to run at all
+// rather than being open to anyone.
 function requireCronSecret(req, res, next) {
-  const provided = req.query.secret || req.headers["x-cron-secret"];
-  if (process.env.CRON_SECRET && provided !== process.env.CRON_SECRET) {
-    return res.status(401).json({ error: "invalid cron secret" });
+  const expected = process.env.CRON_SECRET;
+  if (!expected) {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(503).json({ error: "CRON_SECRET is not configured" });
+    }
+    return next();
   }
+  const provided = req.headers["x-cron-secret"] || req.query.secret;
+  if (!safeEqual(provided, expected)) return res.status(401).json({ error: "invalid cron secret" });
   next();
 }
 
@@ -91,8 +107,12 @@ router.all("/tick", requireCronSecret, async (req, res) => {
     // cheap SELECT on every tick for any deployment that hasn't turned
     // this on, same "safe to always call" shape as the sweeps above.
     const authScans = await runAuthScanSweep();
+    const pruned = await pruneOldData().catch((err) => {
+      console.error("retention sweep failed:", err.message);
+      return { checksPruned: 0 };
+    });
 
-    res.json({ ...uptimeResults, certChecks, securityScans, dnsChecks, ctChecks, digestsSent, breachesChecked, authScans });
+    res.json({ ...uptimeResults, certChecks, securityScans, dnsChecks, ctChecks, digestsSent, breachesChecked, authScans, ...pruned });
   } finally {
     await client.query("SELECT pg_advisory_unlock($1)", [TICK_LOCK_KEY]).catch(() => {});
     client.release();

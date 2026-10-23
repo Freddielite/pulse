@@ -1,11 +1,13 @@
 import { Router } from "express";
 import { pool } from "../db.js";
+import { uuidParams } from "../lib/validateParams.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { generateShareToken } from "../lib/shareLinks.js";
 import { requireOrgRole } from "../lib/orgAccess.js";
 import { verifyCustomDomain, registerDomainWithVercel } from "../lib/customDomain.js";
 
 const router = Router();
+uuidParams(router);
 router.use(requireAuth);
 
 // Same broadened access as monitors.js: a user can select any monitor

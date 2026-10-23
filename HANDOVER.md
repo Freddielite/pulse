@@ -54,7 +54,7 @@ curls the same URL works identically.
 | `SIGNUP_CODE` | Recommended | Gate signup so randoms can't create accounts on your instance |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | For push | Generate with `npm run gen-vapid` in `backend/` |
 | `VAPID_SUBJECT` | For push | `mailto:you@example.com` |
-| `BREVO_API_KEY` / `EMAIL_FROM` / `EMAIL_FROM_NAME` | For email | Free API key from [Brevo](https://app.brevo.com) (300 emails/day on the free plan) plus a sender address verified in Brevo's dashboard. `EMAIL_FROM_NAME` is optional, defaults to "Pulse". Replaced SMTP entirely - see the "Email switched from SMTP to Brevo" entry under Recent changes for why. |
+| `WYNMAIL_API_KEY` / `WYNMAIL_URL` | For email | API key (`wm_...`) from the API page of Pulse's workspace in Wynmail. `WYNMAIL_URL` is optional and defaults to `https://wynmail.onrender.com`. The workspace needs an approved sending domain and sender set in Wynmail; Wynmail sends from that, so Pulse has no `EMAIL_FROM` any more. Replaced Brevo, see "Email moved to Wynmail" below. |
 | `TELEGRAM_BOT_TOKEN` | For Telegram | One bot for the whole instance, from [@BotFather](https://t.me/BotFather). |
 | `TELEGRAM_CHAT_ID` | Optional, for Telegram | Hardcodes a single destination chat for the whole deployment. Simplest setup for a single-user instance - set this and skip per-user chat IDs entirely. If unset, falls back to each user's own `telegram_chat_id` (see below), for deployments with more than one account. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | For blacklist checks | Free from the Google Cloud Console (enable the Safe Browsing API). Without it, `blacklist_status` stays `NULL` on every monitor rather than reading as a false "clean" - see lib/blacklistCheck.js. |
@@ -852,7 +852,7 @@ default, not a broken one.
   a free instance. `sendAlertEmail({ to, subject, text })` kept the exact
   same signature, so every call site across the app (checkRunner.js,
   digest.js, securityEvents.js, breachCheck.js, organizations.js) needed
-  no changes at all. Needs `BREVO_API_KEY` and `EMAIL_FROM` (a sender
+  no changes at all. Needs `WYNMAIL_API_KEY` (a sender
   address verified in Brevo's dashboard) - the old `SMTP_*` vars can be
   removed from Render, they're no longer read anywhere.
 
@@ -1590,3 +1590,29 @@ default suite.
   `psl` package), see Recent changes above.
 - ~~More subdomain-takeover signatures~~ - expanded from 8 to 18
   platforms, see Recent changes above.
+
+## Security and reliability pass (audit against the production checklist)
+
+Changes, all verified against a real Postgres:
+
+- **Crash fix.** Async route errors are now caught (`lib/asyncErrors.js`) and end in a JSON 500 from the error handler in `index.js`. Malformed IDs in URLs return 404 before reaching Postgres (`lib/validateParams.js`). Previously `/api/monitors/not-a-uuid/checks` threw an unhandled rejection.
+- **Secret leak fixed.** `monitors.auth_header_value` was returned to the browser and to every org member by `SELECT *`. It is now stripped from responses; the UI gets `has_auth_header`. PATCH keeps the saved value when the field is blank; clearing the header name clears both.
+- **Password reset.** `POST /auth/forgot-password` (generic response, own rate-limit scope) and `POST /auth/reset-password`. Tokens are hashed, expire in 60 minutes, are single use (DELETE ... RETURNING), and a reset ends every session. Frontend: `#/reset-password?token=` page, "Forgot password?" on the login form. Requires `FRONTEND_URL` and email configured.
+- **Sessions.** New session ID on every login step (fixation). Idle timeout: 7 days rolling instead of a flat 30. `POST /auth/sessions/revoke-all` plus a "Sign out all" button in Settings. The `session` table is now created in `migrate()` with an index on `sess->>'userId'`.
+- **Retention.** `checks` rows older than `CHECK_RETENTION_DAYS` (default 180, min 30) are deleted in batches of 5000 per tick. Index `idx_checks_checked_at` is built CONCURRENTLY.
+- **Fail closed.** In production, `/api/cron/tick` returns 503 if `CRON_SECRET` is unset (it used to be open). Secret compare is constant-time. Prefer the `x-cron-secret` header; `?secret=` still works so cron-job.org keeps running, but query strings land in access logs. `CORS_ORIGIN` unset in production now refuses cross-origin requests instead of `*`; it accepts a comma-separated list.
+- **Tests.** `npm test` in `backend/` (node:test).
+
+### Known gaps from the audit (not done here)
+
+- Migrations are one idempotent block run at boot. No version table, no rollback. Moving to numbered migrations needs a runner (node-pg-migrate or similar).
+- Login lockout is per-email and per-IP, 8 failures per 15 minutes, no permanent lock. An attacker can keep a known email locked out of login; there is no unlock-by-email-link path.
+- No auth event log (logins, resets, 2FA changes). Only org actions are audited.
+- `monitors.auth_header_value` is still plaintext at rest. `lib/credentialCrypto.js` exists and could encrypt it.
+- DB connection uses `rejectUnauthorized: false`.
+- Public CSP-report and share endpoints have no rate limit.
+- No CI, no IaC, no staging environment, no backups or restore test in this repo (depends on the Render plan).
+
+## Email moved to Wynmail
+
+`lib/mailer.js` now posts to Wynmail's `POST /v1/emails` instead of Brevo. Same `sendAlertEmail({ to, subject, text, actionUrl, actionLabel })` signature and `{ sent, reason }` result, so no caller changed. Setup: in Wynmail create a workspace for Pulse, approve its sending domain, create an API key, set `WYNMAIL_API_KEY` on Render. Remove `BREVO_API_KEY` and `EMAIL_FROM`. Notes: Wynmail has a daily send cap per workspace and blocks addresses that bounced or complained (422). Its backend can cold start on a free Render plan, hence the 30 second timeout. Literal `{{` in outgoing text is broken up because Wynmail merges placeholders.

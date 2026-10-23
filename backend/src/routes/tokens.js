@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { pool } from "../db.js";
+import { uuidParams } from "../lib/validateParams.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { generateToken, hashToken } from "../lib/apiTokens.js";
 
 const router = Router();
+uuidParams(router);
 router.use(requireAuth);
 
 // Never returns token_hash - there's no legitimate reason for the

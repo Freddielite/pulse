@@ -54,13 +54,15 @@ function clientIp(req) {
  * legitimate user logging in successfully ten times in a row is never
  * penalized - only failures count toward the limit.
  */
-export function authRateLimit({ max = 8, windowMinutes = 15, identifierField = "email" } = {}) {
+export function authRateLimit({ max = 8, windowMinutes = 15, identifierField = "email", scope = "" } = {}) {
   return async function rateLimitMiddleware(req, res, next) {
     if (Math.random() < SWEEP_PROBABILITY) sweepOldAttempts();
 
     const identifier = String(req.body?.[identifierField] || "").trim().toLowerCase();
-    const buckets = [`ip:${clientIp(req)}`];
-    if (identifier) buckets.push(`id:${identifier}`);
+    // scope keeps unrelated flows (e.g. password reset requests) from
+    // eating into the login bucket for the same email or IP.
+    const buckets = [`${scope}ip:${clientIp(req)}`];
+    if (identifier) buckets.push(`${scope}id:${identifier}`);
 
     try {
       const { rows } = await pool.query(

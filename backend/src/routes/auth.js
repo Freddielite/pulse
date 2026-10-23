@@ -11,6 +11,7 @@ import { sendAlertEmail } from "../lib/mailer.js";
 import { hashToken } from "../lib/apiTokens.js";
 import { claimPendingInvites } from "../lib/orgAccess.js";
 import { assertPublicHttpUrl } from "../lib/urlSafety.js";
+import { createResetToken, consumeResetToken, RESET_TTL } from "../lib/passwordReset.js";
 
 const router = Router();
 
@@ -46,6 +47,34 @@ const PUBLIC_USER_FIELDS = [
   "breach_checked_at",
   "breach_last_result",
 ];
+
+
+// New session ID at every privilege change (password step, 2FA step,
+// signup confirmation) so a session ID planted before login is useless
+// after it (session fixation).
+function establishSession(req, userId) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) return reject(err);
+      req.session.userId = userId;
+      resolve();
+    });
+  });
+}
+
+function startPendingTotp(req, userId) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) return reject(err);
+      req.session.pendingTotpUserId = userId;
+      resolve();
+    });
+  });
+}
+
+function destroyAllSessions(userId, exceptSid = null) {
+  return pool.query(`DELETE FROM session WHERE sess->>'userId' = $1 AND ($2::text IS NULL OR sid != $2)`, [userId, exceptSid]);
+}
 
 function toPublicUser(user) {
   return Object.fromEntries(PUBLIC_USER_FIELDS.map((key) => [key, user[key]]));
@@ -153,7 +182,7 @@ router.post("/signup", authRateLimit({ max: 5, windowMinutes: 60 }), async (req,
   // Unlike every other email in this app, this one being sent IS the
   // point of the request - there's no other way for a brand-new signup
   // to get their token, and the response above is deliberately generic
-  // either way. A genuine send failure here (Brevo not configured, API
+  // either way. A genuine send failure here (Wynmail not configured, API
   // error) has nothing to do with whether the email was already
   // registered, so surfacing it honestly instead of the generic message
   // doesn't reopen the enumeration this flow exists to close.
@@ -187,7 +216,7 @@ router.post("/verify-email", authRateLimit({ max: 20, windowMinutes: 60, identif
       [pending.email, pending.password_hash, pending.alert_email]
     );
     await pool.query(`DELETE FROM pending_signups WHERE id = $1`, [pending.id]);
-    req.session.userId = created[0].id;
+    await establishSession(req, created[0].id);
     // Claims any invite sent to this address before the account existed
     // - see claimPendingInvites for why this has to happen exactly here.
     await claimPendingInvites(created[0].id, created[0].email);
@@ -227,11 +256,11 @@ router.post("/login", authRateLimit({ max: 8, windowMinutes: 15 }), async (req, 
       // second, narrower field (pendingTotpUserId) rather than userId,
       // so nothing that checks req.session.userId (i.e. requireAuth)
       // treats this half-logged-in state as an authenticated session.
-      req.session.pendingTotpUserId = user.id;
+      await startPendingTotp(req, user.id);
       return res.json({ requires_totp: true });
     }
 
-    req.session.userId = user.id;
+    await establishSession(req, user.id);
     res.json(toPublicUser(user));
   } catch (err) {
     console.error(err);
@@ -253,8 +282,7 @@ router.post("/2fa/verify-login", authRateLimit({ max: 8, windowMinutes: 15, iden
   if (!user) return res.status(400).json({ error: "no pending login" });
 
   if (code && verifyTotp(user.totp_secret, code)) {
-    req.session.userId = user.id;
-    delete req.session.pendingTotpUserId;
+    await establishSession(req, user.id);
     return res.json(toPublicUser(user));
   }
 
@@ -265,8 +293,7 @@ router.post("/2fa/verify-login", authRateLimit({ max: 8, windowMinutes: 15, iden
         // One-time - consumed on use, same as any recovery code.
         const remaining = codes.slice(0, i).concat(codes.slice(i + 1));
         await pool.query(`UPDATE users SET totp_backup_codes = $2 WHERE id = $1`, [user.id, JSON.stringify(remaining)]);
-        req.session.userId = user.id;
-        delete req.session.pendingTotpUserId;
+        await establishSession(req, user.id);
         return res.json(toPublicUser(user));
       }
     }
@@ -306,8 +333,60 @@ router.post("/change-password", requireAuth, authRateLimit({ max: 5, windowMinut
   // The current session (this request's own) is deliberately kept
   // alive - changing your password shouldn't also log out the browser
   // tab you just changed it from.
-  await pool.query(`DELETE FROM session WHERE sess->>'userId' = $1 AND sid != $2`, [req.userId, req.sessionID]);
+  await destroyAllSessions(req.userId, req.sessionID);
   res.json({ ok: true });
+});
+
+// --- Password reset ---
+
+// Always the same response whether or not the email has an account, and the
+// email is awaited either way so response time does not reveal it. Rate
+// limited on both IP and the submitted address; every request counts, since
+// each one can send an email to a third party.
+router.post("/forgot-password", authRateLimit({ max: 5, windowMinutes: 60, scope: "reset:" }), async (req, res) => {
+  const GENERIC = { message: "If that email has an account, a reset link is on its way. It expires in 60 minutes and works once." };
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: "email is required" });
+  await req.recordAuthFailure();
+
+  const appUrl = process.env.FRONTEND_URL?.trim();
+  const { rows } = await pool.query(`SELECT id FROM users WHERE email = $1`, [email]);
+  if (rows[0] && appUrl) {
+    const token = await createResetToken(rows[0].id);
+    const link = `${appUrl.replace(/\/$/, "")}/#/reset-password?token=${token}`;
+    await sendAlertEmail({
+      to: email,
+      subject: "Reset your Pulse password",
+      text: `Someone asked to reset the password for this Pulse account. Open this link within ${RESET_TTL} minutes to choose a new one. It works once. If this wasn't you, ignore this email and nothing changes: ${link}`,
+      actionUrl: link,
+      actionLabel: "Reset password",
+    }).catch((err) => console.error("reset email failed:", err.message));
+  }
+  res.json(GENERIC);
+});
+
+router.post("/reset-password", authRateLimit({ max: 10, windowMinutes: 60, identifierField: "__none__", scope: "reset:" }), async (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || !password || String(password).length < 8) {
+    return res.status(400).json({ error: "a reset token and an 8+ character password are required" });
+  }
+  const userId = await consumeResetToken(String(token));
+  if (!userId) {
+    await req.recordAuthFailure();
+    return res.status(400).json({ error: "this reset link is invalid, expired, or already used" });
+  }
+  const hash = await bcrypt.hash(String(password), 12);
+  await pool.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [userId, hash]);
+  // A reset exists because the old password may be compromised: end every
+  // session. 2FA, if enabled, is still required at the next login.
+  await destroyAllSessions(userId);
+  res.json({ ok: true });
+});
+
+// Kills every session for the signed-in user, this one included.
+router.post("/sessions/revoke-all", requireAuth, async (req, res) => {
+  await destroyAllSessions(req.userId);
+  req.session.destroy(() => res.json({ ok: true }));
 });
 
 router.get("/me", requireAuth, async (req, res) => {

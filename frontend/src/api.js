@@ -34,6 +34,9 @@ async function apiFetch(path, options = {}) {
 
 export const signup = (payload) => apiFetch("/auth/signup", { method: "POST", body: JSON.stringify(payload) });
 export const verifyEmail = (token) => apiFetch("/auth/verify-email", { method: "POST", body: JSON.stringify({ token }) });
+export const forgotPassword = (email) => apiFetch("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
+export const resetPassword = (token, password) => apiFetch("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password }) });
+export const revokeAllSessions = () => apiFetch("/auth/sessions/revoke-all", { method: "POST" });
 export const login = (payload) => apiFetch("/auth/login", { method: "POST", body: JSON.stringify(payload) });
 export const logout = () => apiFetch("/auth/logout", { method: "POST" });
 export const getMe = () => apiFetch("/auth/me");

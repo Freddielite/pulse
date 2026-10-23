@@ -4,6 +4,7 @@ import App from "./App.jsx";
 import SharedMonitorView from "./components/SharedMonitorView.jsx";
 import SharedStatusPageView from "./components/SharedStatusPageView.jsx";
 import VerifyEmail from "./components/VerifyEmail.jsx";
+import ResetPassword from "./components/ResetPassword.jsx";
 import { getStatusPageByDomain } from "./api.js";
 import "./App.css";
 
@@ -72,6 +73,7 @@ if ("serviceWorker" in navigator) {
 const shareMatch = window.location.hash.match(/^#\/share\/(.+)$/);
 const statusPageMatch = window.location.hash.match(/^#\/status\/(.+)$/);
 const verifyMatch = window.location.hash.match(/^#\/verify-email\?token=(.+)$/);
+const resetMatch = window.location.hash.match(/^#\/reset-password\?token=(.+)$/);
 
 // A fourth kind of entry point, checked by hostname rather than hash: a
 // status page's own custom domain (status.client.com) should show that
@@ -84,7 +86,7 @@ const verifyMatch = window.location.hash.match(/^#\/verify-email\?token=(.+)$/);
 // common case. Skipped for localhost so local development doesn't fire
 // a doomed request on every reload.
 async function resolveCustomDomainToken() {
-  if (shareMatch || statusPageMatch || verifyMatch) return null;
+  if (shareMatch || statusPageMatch || verifyMatch || resetMatch) return null;
   if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") return null;
   try {
     const result = await getStatusPageByDomain(window.location.hostname);
@@ -103,6 +105,8 @@ resolveCustomDomainToken().then((customDomainToken) => {
         <SharedStatusPageView token={decodeURIComponent(statusPageMatch[1])} />
       ) : verifyMatch ? (
         <VerifyEmail token={decodeURIComponent(verifyMatch[1])} />
+      ) : resetMatch ? (
+        <ResetPassword token={decodeURIComponent(resetMatch[1])} />
       ) : customDomainToken ? (
         <SharedStatusPageView token={customDomainToken} />
       ) : (

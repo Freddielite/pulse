@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { login, signup, verifyLoginTotp } from "./api.js";
+import { login, signup, verifyLoginTotp, forgotPassword } from "./api.js";
 
 export default function AuthRoot({ onAuthed }) {
   const [mode, setMode] = useState("login");
@@ -18,13 +18,18 @@ export default function AuthRoot({ onAuthed }) {
   // confirmation link is clicked), so this replaces the form with
   // "check your email" instead of calling onAuthed.
   const [signupMessage, setSignupMessage] = useState(null);
+  const [forgotMode, setForgotMode] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      if (mode === "login") {
+      if (forgotMode) {
+        const result = await forgotPassword(email);
+        setSignupMessage(result.message);
+        setForgotMode(false);
+      } else if (mode === "login") {
         const result = await login({ email, password });
         if (result.requires_totp) setAwaitingTotp(true);
         else onAuthed(result);
@@ -113,10 +118,10 @@ export default function AuthRoot({ onAuthed }) {
                 <label>Email</label>
                 <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
               </div>
-              <div className="pl-field">
+              {!forgotMode && <div className="pl-field">
                 <label>Password</label>
                 <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
-              </div>
+              </div>}
               {mode === "signup" && (
                 <div className="pl-field">
                   <label>Signup code</label>
@@ -125,13 +130,15 @@ export default function AuthRoot({ onAuthed }) {
               )}
               {error && <div className="pl-error">{error}</div>}
               <button className="pl-btn" type="submit" disabled={busy} style={{ width: "100%" }}>
-                {busy ? "Working..." : mode === "login" ? "Log in" : "Create account"}
+                {busy ? "Working..." : forgotMode ? "Send reset link" : mode === "login" ? "Log in" : "Create account"}
               </button>
             </form>
 
             <div className="pl-auth__switch">
-              {mode === "login" ? (
-                <>No account yet? <button onClick={() => setMode("signup")}>Sign up</button></>
+              {forgotMode ? (
+                <button type="button" onClick={() => { setForgotMode(false); setError(null); }}>Back to log in</button>
+              ) : mode === "login" ? (
+                <><button type="button" onClick={() => { setForgotMode(true); setError(null); }}>Forgot password?</button> · No account yet? <button onClick={() => setMode("signup")}>Sign up</button></>
               ) : (
                 <>Already have an account? <button onClick={() => setMode("login")}>Log in</button></>
               )}

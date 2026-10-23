@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "./lib/asyncErrors.js";
 import express from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
@@ -53,7 +54,14 @@ app.set("trust proxy", 1);
 // sites.
 app.disable("x-powered-by");
 
-const corsOrigin = process.env.CORS_ORIGIN || "*";
+// Never "*" with credentials. Unset in production means no cross-origin
+// access at all (fail closed); unset in dev allows any origin for convenience.
+// CORS_ORIGIN may be a comma-separated list.
+const corsList = (process.env.CORS_ORIGIN || "").split(",").map((o) => o.trim()).filter(Boolean);
+if (process.env.NODE_ENV === "production" && corsList.length === 0) {
+  console.error("SECURITY WARNING: CORS_ORIGIN is not set. All cross-origin requests will be refused until it is.");
+}
+const corsOrigin = corsList.length > 0 ? corsList : process.env.NODE_ENV === "production" ? false : true;
 app.use(cors({ origin: corsOrigin, credentials: true }));
 // Applied before every route, including the public and error paths, so
 // there's no response shape that escapes them.
@@ -89,8 +97,11 @@ app.use(
     secret: process.env.SESSION_SECRET || "dev-only-secret-change-me",
     resave: false,
     saveUninitialized: false,
+    // Rolling: the 7-day lifetime is an idle timeout that renews on
+    // activity, instead of a flat 30 days from login.
+    rolling: true,
     cookie: {
-      maxAge: 1000 * 60 * 60 * 24 * 30,
+      maxAge: 1000 * 60 * 60 * 24 * 7,
       httpOnly: true,
       // Cross-site cookies (Vercel frontend + Render backend) need
       // sameSite: "none", which browsers only honor over HTTPS, hence
@@ -112,6 +123,20 @@ app.use("/api/tokens", tokensRouter);
 app.use("/api/status-pages", statusPagesRouter);
 app.use("/api/public", publicRouter);
 app.use("/api/organizations", organizationsRouter);
+
+// Last in the chain: any error forwarded by a route (including async
+// rejections, see lib/asyncErrors.js) ends here as a clean 500 instead of
+// a hung request or a crashed process. Details go to the log only.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(`${req.method} ${req.path}:`, err?.message || err);
+  if (res.headersSent) return;
+  res.status(err?.status || 500).json({ error: err?.status && err.status < 500 ? err.message : "internal error" });
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection:", reason instanceof Error ? reason.message : reason);
+});
 
 const PORT = process.env.PORT || 4000;
 

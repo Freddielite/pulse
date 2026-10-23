@@ -38,7 +38,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
   const [interval, setInterval] = useState(monitor?.check_interval_min || 5);
   const [timeoutSec, setTimeoutSec] = useState(monitor?.check_timeout_sec || 15);
   const [authHeaderName, setAuthHeaderName] = useState(monitor?.auth_header_name || "");
-  const [authHeaderValue, setAuthHeaderValue] = useState(monitor?.auth_header_value || "");
+  const [authHeaderValue, setAuthHeaderValue] = useState("");
   const [keepAlive, setKeepAlive] = useState(monitor?.keep_alive_target || false);
   const [groupName, setGroupName] = useState(monitor?.group_name || "");
   const [bodyContains, setBodyContains] = useState(monitor?.body_contains || "");
@@ -108,7 +108,9 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
       check_interval_min: Number(interval),
       check_timeout_sec: Number(timeoutSec),
       auth_header_name: authHeaderName.trim() || null,
-      auth_header_value: authHeaderValue.trim() || null,
+      // Omitted when blank: the server never sends the saved value back, so
+      // blank means "keep what is saved". Clearing the header name clears both.
+      auth_header_value: authHeaderValue.trim() || undefined,
       keep_alive_target: keepAlive,
       group_name: groupName.trim() || null,
       body_contains: bodyContains.trim() || null,
@@ -259,7 +261,7 @@ export default function MonitorForm({ monitor, existingGroups = [], onClose, onS
               </div>
               <div className="pl-field">
                 <label>Auth header value (optional)</label>
-                <input value={authHeaderValue} onChange={(e) => setAuthHeaderValue(e.target.value)} placeholder="Bearer ..." />
+                <input value={authHeaderValue} onChange={(e) => setAuthHeaderValue(e.target.value)} placeholder={monitor?.has_auth_header ? "Saved. Leave blank to keep it" : "Bearer ..."} />
               </div>
             </div>
           )}

@@ -60,8 +60,17 @@ export async function migrate() {
       "telegram": {"down": true, "degraded": true, "contentChanged": true, "expiring": true, "security": true}
     }'::jsonb;
 
-    -- express-session's connect-pg-simple store creates/manages this table
-    -- itself on boot (see index.js), so it isn't defined here.
+    -- express-session's connect-pg-simple store manages rows in this table
+    -- (see index.js). Created here too, with the same schema, so routes that
+    -- revoke sessions never hit a missing table on a fresh database, and
+    -- indexed by user so "end every session for this user" is not a scan.
+    CREATE TABLE IF NOT EXISTS session (
+      sid    VARCHAR NOT NULL COLLATE "default" PRIMARY KEY,
+      sess   JSON NOT NULL,
+      expire TIMESTAMP(6) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON session (expire);
+    CREATE INDEX IF NOT EXISTS idx_session_user ON session ((sess->>'userId'));
 
     CREATE TABLE IF NOT EXISTS monitors (
       id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -619,6 +628,17 @@ export async function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_pending_signups_token_hash ON pending_signups(token_hash);
 
+    -- Password reset tokens: hashed, single use (row is deleted on use),
+    -- expire after 60 minutes. See lib/passwordReset.js.
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+
     -- Custom domain for a status page - moved here from
     -- organizations.custom_domain (which stays in place, unused, for
     -- backward compatibility rather than a destructive column drop) once
@@ -667,4 +687,26 @@ export async function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_auth_scans_monitor_time ON auth_scans(monitor_id, scanned_at DESC);
   `);
+
+  // Separate statement on purpose: CONCURRENTLY cannot run inside the
+  // multi-statement block above, and it avoids write-locking the checks
+  // table while the index builds on a large existing dataset. Supports the
+  // retention sweep below, which filters on checked_at alone.
+  await pool.query(`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_checks_checked_at ON checks(checked_at)`);
+}
+
+// Retention: the checks table gets a row per monitor per interval forever
+// otherwise. Public views read at most 180 days back, so nothing older is
+// ever shown. Deleted in bounded batches so one tick never runs a
+// long-held delete; a backlog drains across ticks.
+export async function pruneOldData() {
+  const days = Math.max(30, Number(process.env.CHECK_RETENTION_DAYS) || 180);
+  const { rowCount } = await pool.query(
+    `DELETE FROM checks WHERE id IN (
+       SELECT id FROM checks WHERE checked_at < now() - ($1 || ' days')::interval LIMIT 5000
+     )`,
+    [String(days)]
+  );
+  await pool.query(`DELETE FROM password_resets WHERE expires_at < now()`);
+  return { checksPruned: rowCount };
 }

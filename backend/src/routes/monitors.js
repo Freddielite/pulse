@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
+import { uuidParams } from "../lib/validateParams.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { runUptimeChecks, scanAndRecord, runDnsSweep, runCtSweep, runAndRecordAuthScan } from "../lib/checkRunner.js";
 import { parseAcceptedStatuses } from "../lib/authProbe.js";
@@ -10,6 +11,7 @@ import { parseTcpTarget } from "../lib/tcpCheck.js";
 import { encryptCredential, isCredentialEncryptionConfigured } from "../lib/credentialCrypto.js";
 
 const router = Router();
+uuidParams(router);
 router.use(requireAuth);
 
 // Every general-purpose monitor response below uses SELECT */RETURNING
@@ -27,8 +29,11 @@ router.use(requireAuth);
 function stripAuthCredential(row) {
   if (!row) return row;
   // eslint-disable-next-line no-unused-vars -- destructured specifically to exclude it below
-  const { auth_scan_credential: _auth_scan_credential, ...rest } = row;
-  return rest;
+  // auth_header_value is a live secret for the monitored site; org members
+  // can read monitors too, so it never leaves the server. has_auth_header
+  // tells the UI one is saved.
+  const { auth_scan_credential: _auth_scan_credential, auth_header_value: _auth_header_value, ...rest } = row;
+  return { ...rest, has_auth_header: !!(row.auth_header_name && row.auth_header_value) };
 }
 function stripAuthCredentialFromList(rows) {
   return rows.map(stripAuthCredential);
@@ -317,6 +322,11 @@ router.patch("/:id", async (req, res) => {
       if (!allowed) return res.status(403).json({ error: "you need admin access on that organization to move monitors into it" });
     }
   }
+  // Header name omitted = leave both untouched; header name cleared = clear
+  // both; value omitted/blank with a name still set = keep the saved value
+  // (the UI never receives it, so blank means "unchanged").
+  const nextHeaderName = auth_header_name === undefined ? monitor.auth_header_name : auth_header_name || null;
+  const nextHeaderValue = !nextHeaderName ? null : auth_header_value || monitor.auth_header_value || null;
   try {
     const willTouchSteps = monitor_type !== undefined;
     const nextType = monitor_type === undefined ? null : normalizeMonitorType(monitor_type);
@@ -362,8 +372,8 @@ router.patch("/:id", async (req, res) => {
         url,
         method,
         expected_status,
-        auth_header_name ?? null,
-        auth_header_value ?? null,
+        nextHeaderName,
+        nextHeaderValue,
         check_interval_min,
         keep_alive_target,
         active,

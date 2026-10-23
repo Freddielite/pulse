@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
+import { uuidParams } from "../lib/validateParams.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { getUserOrgRole, requireOrgRole, logOrgAction } from "../lib/orgAccess.js";
 import { sendAlertEmail } from "../lib/mailer.js";
@@ -7,6 +8,7 @@ import { sendTelegramMessage, resolveChatId } from "../lib/telegram.js";
 import { sendWebhookAlert } from "../lib/webhook.js";
 
 const router = Router();
+uuidParams(router);
 router.use(requireAuth);
 
 const VALID_ROLES = ["member", "admin"]; // 'owner' is never assigned through the invite/role-change routes - see PATCH /:id/members/:memberId
